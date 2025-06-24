@@ -129,3 +129,14 @@ sequoiarecover init
 You'll be prompted for your account ID, application key, and an encryption password. After that, the `backup` and `schedule` commands will automatically decrypt the credentials when uploading to Backblaze.
 
 For instructions on using the local server feature see [docs/server.md](docs/server.md).
+
+### Logging
+
+SequoiaRecover uses the `tracing` crate for logging. Enable detailed output by
+setting the `RUST_LOG` environment variable before running commands:
+
+```bash
+RUST_LOG=info sequoiarecover backup --source /data --bucket my-bucket
+```
+
+Use `debug` for even more verbose logs.

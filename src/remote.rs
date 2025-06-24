@@ -9,6 +9,7 @@ use chrono::{DateTime, Local};
 use std::time::{Duration, UNIX_EPOCH};
 use tokio::fs::File as TokioFile;
 use tokio::runtime::Runtime;
+use tracing::{error, info};
 
 async fn upload_to_backblaze(
     account_id: &str,
@@ -45,12 +46,27 @@ pub fn upload_to_backblaze_blocking(
         Ok(())
     } else {
         let rt = Runtime::new()?;
-        rt.block_on(upload_to_backblaze(
-            account_id,
-            application_key,
-            bucket,
-            file_path,
-        ))
+        let mut delay = Duration::from_secs(1);
+        for attempt in 0..3 {
+            match rt.block_on(upload_to_backblaze(
+                account_id,
+                application_key,
+                bucket,
+                file_path,
+            )) {
+                Ok(_) => return Ok(()),
+                Err(e) => {
+                    if attempt == 2 {
+                        return Err(e);
+                    } else {
+                        error!("Upload attempt {} failed: {}", attempt + 1, e);
+                        std::thread::sleep(delay);
+                        delay *= 2;
+                    }
+                }
+            }
+        }
+        unreachable!()
     }
 }
 
@@ -87,13 +103,28 @@ pub fn download_from_backblaze_blocking(
         Ok(())
     } else {
         let rt = Runtime::new()?;
-        rt.block_on(download_from_backblaze(
-            account_id,
-            application_key,
-            bucket,
-            file_name,
-            dest,
-        ))
+        let mut delay = Duration::from_secs(1);
+        for attempt in 0..3 {
+            match rt.block_on(download_from_backblaze(
+                account_id,
+                application_key,
+                bucket,
+                file_name,
+                dest,
+            )) {
+                Ok(_) => return Ok(()),
+                Err(e) => {
+                    if attempt == 2 {
+                        return Err(e);
+                    } else {
+                        error!("Download attempt {} failed: {}", attempt + 1, e);
+                        std::thread::sleep(delay);
+                        delay *= 2;
+                    }
+                }
+            }
+        }
+        unreachable!()
     }
 }
 
@@ -129,7 +160,7 @@ async fn show_remote_history(
         for file in resp.files {
             let dt: DateTime<Local> =
                 (UNIX_EPOCH + Duration::from_millis(file.upload_timestamp)).into();
-            println!("{}\t{}", dt.format("%Y-%m-%d %H:%M:%S"), file.file_name);
+            info!("{}\t{}", dt.format("%Y-%m-%d %H:%M:%S"), file.file_name);
         }
         if let Some(n) = resp.next_file_name {
             next = Some(n);
