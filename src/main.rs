@@ -62,6 +62,9 @@ enum Commands {
         /// URL of the backup server when using the server cloud option
         #[arg(long)]
         server_url: Option<String>,
+        /// Override detected link speed in Mbps when using auto compression
+        #[arg(long)]
+        compression_threshold: Option<u64>,
     },
     /// Schedule automated backups at a fixed interval (in seconds)
     Schedule {
@@ -92,6 +95,9 @@ enum Commands {
         /// URL of the backup server when using the server cloud option
         #[arg(long)]
         server_url: Option<String>,
+        /// Override detected link speed in Mbps when using auto compression
+        #[arg(long)]
+        compression_threshold: Option<u64>,
         /// Interval in seconds between backups
         #[arg(long, default_value_t = 3600)]
         interval: u64,
@@ -182,9 +188,10 @@ fn main() {
             account_id,
             application_key,
             server_url,
+            compression_threshold,
         } => {
             let actual_compression = if compression == CompressionType::Auto {
-                let c = auto_select_compression();
+                let c = auto_select_compression(compression_threshold);
                 println!("Auto selected compression: {:?}", c);
                 c
             } else {
@@ -234,12 +241,13 @@ fn main() {
             account_id,
             application_key,
             server_url,
+            compression_threshold,
             interval,
             max_runs,
             mode,
         } => {
             let actual_compression = if compression == CompressionType::Auto {
-                let c = auto_select_compression();
+                let c = auto_select_compression(compression_threshold);
                 println!("Auto selected compression: {:?}", c);
                 c
             } else {

@@ -57,7 +57,7 @@ pub fn run_backup(
     let file = File::create(output)?;
 
     let actual = if compression == CompressionType::Auto {
-        auto_select_compression()
+        auto_select_compression(None)
     } else {
         compression
     };
@@ -133,7 +133,7 @@ fn add_files<T: std::io::Write>(
     Ok(())
 }
 
-fn detect_link_speed() -> Option<u64> {
+fn detect_link_speed(duration_secs: u64) -> Option<u64> {
     let mut networks = Networks::new_with_refreshed_list();
     let mut start = HashMap::new();
     for (name, data) in &networks {
@@ -145,7 +145,7 @@ fn detect_link_speed() -> Option<u64> {
             data.total_received() + data.total_transmitted(),
         );
     }
-    std::thread::sleep(Duration::from_secs(1));
+    std::thread::sleep(Duration::from_secs(duration_secs));
     networks.refresh(true);
     let mut max_diff = 0u64;
     for (name, data) in &networks {
@@ -162,12 +162,13 @@ fn detect_link_speed() -> Option<u64> {
     if max_diff == 0 {
         None
     } else {
-        Some((max_diff * 8) / 1_000_000)
+        Some((max_diff * 8) / 1_000_000 / duration_secs)
     }
 }
 
-pub fn auto_select_compression() -> CompressionType {
-    match detect_link_speed().unwrap_or(0) {
+pub fn auto_select_compression(override_speed: Option<u64>) -> CompressionType {
+    let speed = override_speed.unwrap_or_else(|| detect_link_speed(5).unwrap_or(0));
+    match speed {
         s if s >= 1000 => CompressionType::None,
         s if s >= 100 => CompressionType::Gzip,
         _ => CompressionType::Zstd,
