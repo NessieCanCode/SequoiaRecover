@@ -1,4 +1,6 @@
-use crate::backup::{restore_backup, run_backup, BackupMode, CompressionType};
+use crate::backup::{
+    auto_select_compression, restore_backup, run_backup, BackupMode, CompressionType,
+};
 use crate::config::{decrypt_config, encrypt_config, Config};
 use crate::remote::{download_from_backblaze_blocking, upload_to_backblaze_blocking};
 use serial_test::serial;
@@ -108,4 +110,11 @@ fn test_download_missing_bucket() -> Result<(), Box<dyn std::error::Error>> {
 
     std::env::remove_var("LOCAL_B2_DIR");
     Ok(())
+}
+
+#[test]
+fn test_auto_select_compression_override() {
+    assert_eq!(auto_select_compression(Some(1500)), CompressionType::None);
+    assert_eq!(auto_select_compression(Some(200)), CompressionType::Gzip);
+    assert_eq!(auto_select_compression(Some(50)), CompressionType::Zstd);
 }
