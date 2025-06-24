@@ -15,7 +15,9 @@ jobs:
         with:
           toolchain: stable
           override: true
+      - name: Cargo fmt
+        run: cargo fmt --check
       - name: Cargo check
-        run: cargo check --all --verbose
+        run: cargo check
       - name: Cargo test
-        run: cargo test --all --verbose
+        run: cargo test
