@@ -24,3 +24,4 @@ rand = "0.8"
 rpassword = "7"
 base64 = "0.21"
 chrono = { version = "0.4", features = ["serde"] }
+sysinfo = "0.35"

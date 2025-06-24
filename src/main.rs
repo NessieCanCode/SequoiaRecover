@@ -1,39 +1,43 @@
 use backblaze_b2_client::client::B2Client;
 use backblaze_b2_client::definitions::bodies::B2ListBucketsBody;
 use backblaze_b2_client::definitions::query_params::B2ListFileNamesQueryParameters;
-use bzip2::write::BzEncoder;
-use bzip2::read::BzDecoder;
-use bzip2::Compression as BzCompression;
-use clap::{Parser, Subcommand, ValueEnum, CommandFactory};
-use clap_mangen::Man;
-use chacha20poly1305::{aead::{Aead, KeyInit}, ChaCha20Poly1305, Nonce};
-use rand::rngs::OsRng;
-use pbkdf2::pbkdf2_hmac;
-use sha2::Sha256;
-use rand::RngCore;
 use base64::{engine::general_purpose, Engine as _};
-use rpassword;
-use serde::{Deserialize, Serialize};
-use flate2::write::GzEncoder;
+use bzip2::read::BzDecoder;
+use bzip2::write::BzEncoder;
+use bzip2::Compression as BzCompression;
+use chacha20poly1305::{
+    aead::{Aead, KeyInit},
+    ChaCha20Poly1305, Nonce,
+};
+use chrono::{DateTime, Local};
+use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
+use clap_mangen::Man;
 use flate2::read::GzDecoder;
+use flate2::write::GzEncoder;
 use flate2::Compression as GzCompression;
 use num_cpus;
+use pbkdf2::pbkdf2_hmac;
+use rand::rngs::OsRng;
+use rand::RngCore;
+use rpassword;
+use serde::{Deserialize, Serialize};
 use serde_json;
+use sha2::Sha256;
 use std::collections::HashMap;
 use std::error::Error;
 use std::fs::File;
+use std::io::Read;
 use std::path::Path;
 use std::path::PathBuf;
 use std::thread::sleep;
 use std::time::{Duration, UNIX_EPOCH};
-use tar::{Builder, Archive};
+use sysinfo::Networks;
+use tar::{Archive, Builder};
 use tokio::fs::File as TokioFile;
 use tokio::runtime::Runtime;
 use walkdir::WalkDir;
-use zstd::stream::write::Encoder as ZstdEncoder;
 use zstd::stream::read::Decoder as ZstdDecoder;
-use chrono::{DateTime, Local};
-use std::io::Read;
+use zstd::stream::write::Encoder as ZstdEncoder;
 
 const CONFIG_PATH: &str = ".sequoiarecover/config.enc";
 const HISTORY_PATH: &str = ".sequoiarecover/history.json";
@@ -232,7 +236,8 @@ fn main() {
                 if cloud == "backblaze" {
                     match load_credentials(account_id, application_key) {
                         Ok((id, key)) => {
-                            if let Err(e) = upload_to_backblaze_blocking(&id, &key, &bucket, &output)
+                            if let Err(e) =
+                                upload_to_backblaze_blocking(&id, &key, &bucket, &output)
                             {
                                 eprintln!("Upload failed: {}", e);
                             } else {
@@ -296,7 +301,12 @@ fn main() {
                 sleep(Duration::from_secs(interval));
             }
         }
-        Commands::History { bucket, cloud, account_id, application_key } => {
+        Commands::History {
+            bucket,
+            cloud,
+            account_id,
+            application_key,
+        } => {
             if let Some(b) = bucket {
                 if cloud == "backblaze" {
                     match load_credentials(account_id, application_key) {
@@ -312,11 +322,20 @@ fn main() {
                 eprintln!("{}", e);
             }
         }
-        Commands::List { backup, compression, bucket, cloud, account_id, application_key } => {
+        Commands::List {
+            backup,
+            compression,
+            bucket,
+            cloud,
+            account_id,
+            application_key,
+        } => {
             let result = if let Some(b) = bucket {
                 if cloud == "backblaze" {
                     match load_credentials(account_id, application_key) {
-                        Ok((id, key)) => list_remote_backup_blocking(&id, &key, &b, &backup, compression),
+                        Ok((id, key)) => {
+                            list_remote_backup_blocking(&id, &key, &b, &backup, compression)
+                        }
                         Err(e) => Err(e),
                     }
                 } else {
@@ -329,11 +348,26 @@ fn main() {
                 eprintln!("{}", e);
             }
         }
-        Commands::Restore { backup, destination, compression, bucket, cloud, account_id, application_key } => {
+        Commands::Restore {
+            backup,
+            destination,
+            compression,
+            bucket,
+            cloud,
+            account_id,
+            application_key,
+        } => {
             let result = if let Some(b) = bucket {
                 if cloud == "backblaze" {
                     match load_credentials(account_id, application_key) {
-                        Ok((id, key)) => restore_remote_backup_blocking(&id, &key, &b, &backup, &destination, compression),
+                        Ok((id, key)) => restore_remote_backup_blocking(
+                            &id,
+                            &key,
+                            &b,
+                            &backup,
+                            &destination,
+                            compression,
+                        ),
                         Err(e) => Err(e),
                     }
                 } else {
@@ -346,37 +380,43 @@ fn main() {
                 eprintln!("{}", e);
             }
         }
-        Commands::Init => {
-            match config_file_path() {
-                Ok(path) => {
-                    let account_id = rpassword::prompt_password("Backblaze Account ID: ").unwrap_or_default();
-                    let application_key = rpassword::prompt_password("Backblaze Application Key: ").unwrap_or_default();
-                    let password = rpassword::prompt_password("Encryption password: ").unwrap_or_default();
-                    let confirm = rpassword::prompt_password("Confirm password: ").unwrap_or_default();
-                    if password != confirm {
-                        eprintln!("Passwords do not match");
-                        return;
-                    }
-                    let cfg = Config { account_id, application_key };
-                    match encrypt_config(&cfg, &password) {
-                        Ok(enc) => {
-                            if let Some(p) = path.parent() { let _ = std::fs::create_dir_all(p); }
-                            if let Ok(f) = File::create(&path) {
-                                if serde_json::to_writer_pretty(f, &enc).is_ok() {
-                                    println!("Config written to {:?}", path);
-                                } else {
-                                    eprintln!("Failed to write config");
-                                }
-                            } else {
-                                eprintln!("Could not create config file");
-                            }
-                        }
-                        Err(e) => eprintln!("Failed to encrypt config: {}", e),
-                    }
+        Commands::Init => match config_file_path() {
+            Ok(path) => {
+                let account_id =
+                    rpassword::prompt_password("Backblaze Account ID: ").unwrap_or_default();
+                let application_key =
+                    rpassword::prompt_password("Backblaze Application Key: ").unwrap_or_default();
+                let password =
+                    rpassword::prompt_password("Encryption password: ").unwrap_or_default();
+                let confirm = rpassword::prompt_password("Confirm password: ").unwrap_or_default();
+                if password != confirm {
+                    eprintln!("Passwords do not match");
+                    return;
                 }
-                Err(e) => eprintln!("{}", e),
+                let cfg = Config {
+                    account_id,
+                    application_key,
+                };
+                match encrypt_config(&cfg, &password) {
+                    Ok(enc) => {
+                        if let Some(p) = path.parent() {
+                            let _ = std::fs::create_dir_all(p);
+                        }
+                        if let Ok(f) = File::create(&path) {
+                            if serde_json::to_writer_pretty(f, &enc).is_ok() {
+                                println!("Config written to {:?}", path);
+                            } else {
+                                eprintln!("Failed to write config");
+                            }
+                        } else {
+                            eprintln!("Could not create config file");
+                        }
+                    }
+                    Err(e) => eprintln!("Failed to encrypt config: {}", e),
+                }
             }
-        }
+            Err(e) => eprintln!("{}", e),
+        },
         Commands::Manpage => {
             let cmd = Cli::command();
             let man = Man::new(cmd);
@@ -517,31 +557,37 @@ fn upload_to_backblaze_blocking(
     ))
 }
 
-#[cfg(target_os = "linux")]
 fn detect_link_speed() -> Option<u64> {
-    use std::fs;
-    if let Ok(entries) = fs::read_dir("/sys/class/net") {
-        for entry in entries.flatten() {
-            let name = entry.file_name();
-            if name.to_string_lossy() == "lo" {
-                continue;
-            }
-            let speed_path = entry.path().join("speed");
-            if let Ok(speed_str) = fs::read_to_string(speed_path) {
-                if let Ok(speed) = speed_str.trim().parse::<u64>() {
-                    if speed > 0 {
-                        return Some(speed);
-                    }
-                }
+    let mut networks = Networks::new_with_refreshed_list();
+    let mut start = std::collections::HashMap::new();
+    for (name, data) in &networks {
+        if name == "lo" || name.starts_with("lo") {
+            continue;
+        }
+        start.insert(
+            name.clone(),
+            data.total_received() + data.total_transmitted(),
+        );
+    }
+    std::thread::sleep(Duration::from_secs(1));
+    networks.refresh(true);
+    let mut max_diff = 0u64;
+    for (name, data) in &networks {
+        if name == "lo" || name.starts_with("lo") {
+            continue;
+        }
+        if let Some(prev) = start.get(name) {
+            let diff = (data.total_received() + data.total_transmitted()).saturating_sub(*prev);
+            if diff > max_diff {
+                max_diff = diff;
             }
         }
     }
-    None
-}
-
-#[cfg(not(target_os = "linux"))]
-fn detect_link_speed() -> Option<u64> {
-    None
+    if max_diff == 0 {
+        None
+    } else {
+        Some((max_diff * 8) / 1_000_000)
+    }
 }
 
 fn auto_select_compression() -> CompressionType {
@@ -671,7 +717,10 @@ fn guess_compression(path: &str) -> CompressionType {
     }
 }
 
-fn open_archive(path: &str, compression: CompressionType) -> Result<Archive<Box<dyn Read>>, Box<dyn Error>> {
+fn open_archive(
+    path: &str,
+    compression: CompressionType,
+) -> Result<Archive<Box<dyn Read>>, Box<dyn Error>> {
     let file = File::open(path)?;
     let reader: Box<dyn Read> = match compression {
         CompressionType::Gzip => Box::new(GzDecoder::new(file)),
@@ -733,7 +782,13 @@ fn download_from_backblaze_blocking(
     dest: &Path,
 ) -> Result<(), Box<dyn Error>> {
     let rt = Runtime::new()?;
-    rt.block_on(download_from_backblaze(account_id, application_key, bucket, file_name, dest))
+    rt.block_on(download_from_backblaze(
+        account_id,
+        application_key,
+        bucket,
+        file_name,
+        dest,
+    ))
 }
 
 async fn show_remote_history(
