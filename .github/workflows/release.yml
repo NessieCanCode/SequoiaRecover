@@ -1,0 +1,88 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*.*.*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            archive: sequoiarecover-linux.zip
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            archive: sequoiarecover-windows.zip
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            archive: sequoiarecover-macos.zip
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          target: ${{ matrix.target }}
+          override: true
+      - name: Build
+        run: cargo build --release --target ${{ matrix.target }}
+      - name: Sign binaries (Windows)
+        if: matrix.os == 'windows-latest' && env.WINDOWS_CERTIFICATE && env.WINDOWS_CERT_PASSWORD
+        shell: pwsh
+        run: |
+          $cert = "$env:RUNNER_TEMP\\cert.pfx"
+          [System.IO.File]::WriteAllBytes($cert, [Convert]::FromBase64String($env:WINDOWS_CERTIFICATE))
+          & signtool sign /f $cert /p $env:WINDOWS_CERT_PASSWORD /tr http://timestamp.digicert.com /td sha256 /fd sha256 target/${{ matrix.target }}/release/sequoiarecover.exe
+          & signtool sign /f $cert /p $env:WINDOWS_CERT_PASSWORD /tr http://timestamp.digicert.com /td sha256 /fd sha256 target/${{ matrix.target }}/release/sequoiarecover-gui.exe
+      - name: Sign binaries (macOS)
+        if: matrix.os == 'macos-latest' && env.MACOS_CERTIFICATE && env.MACOS_CERT_PASSWORD && env.MACOS_CERT_ID
+        run: |
+          echo "$MACOS_CERTIFICATE" | base64 --decode > certificate.p12
+          security create-keychain -p temp build.keychain
+          security import certificate.p12 -k build.keychain -P "$MACOS_CERT_PASSWORD" -T /usr/bin/codesign
+          security list-keychains -s build.keychain
+          security default-keychain -s build.keychain
+          security unlock-keychain -p temp build.keychain
+          codesign --force --timestamp --sign "$MACOS_CERT_ID" target/${{ matrix.target }}/release/sequoiarecover
+          codesign --force --timestamp --sign "$MACOS_CERT_ID" target/${{ matrix.target }}/release/sequoiarecover-gui
+      - name: Sign binaries (Linux)
+        if: matrix.os == 'ubuntu-latest' && env.GPG_PRIVATE_KEY
+        run: |
+          echo "$GPG_PRIVATE_KEY" | gpg --batch --import
+          gpg --batch --yes --detach-sign --armor target/${{ matrix.target }}/release/sequoiarecover
+          gpg --batch --yes --detach-sign --armor target/${{ matrix.target }}/release/sequoiarecover-gui
+      - name: Package
+        shell: bash
+        run: |
+          mkdir dist
+          if [ "${{ matrix.os }}" = "windows-latest" ]; then
+            cp target/${{ matrix.target }}/release/sequoiarecover.exe dist/
+            cp target/${{ matrix.target }}/release/sequoiarecover-gui.exe dist/
+            7z a ${{ matrix.archive }} dist/*
+          else
+            cp target/${{ matrix.target }}/release/sequoiarecover dist/
+            cp target/${{ matrix.target }}/release/sequoiarecover-gui dist/
+            zip -j ${{ matrix.archive }} dist/*
+          fi
+      - uses: actions/upload-artifact@v3
+        with:
+          name: ${{ matrix.archive }}
+          path: ${{ matrix.archive }}
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    steps:
+      - uses: actions/download-artifact@v3
+        with:
+          path: dist
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: dist/**/*

@@ -141,3 +141,19 @@ RUST_LOG=info sequoiarecover backup --source /data --bucket my-bucket
 ```
 
 Use `debug` for even more verbose logs.
+
+## Release Process
+
+SequoiaRecover uses GitHub Actions to build binaries for Windows, macOS and Linux whenever a new version tag is pushed. The workflow is defined in `.github/workflows/release.yml` and can also be triggered manually from the GitHub web UI.
+
+1. Create a version tag locally and push it:
+
+```bash
+git tag -a v1.0.0 -m "Release v1.0.0"
+git push origin v1.0.0
+```
+
+2. GitHub Actions will compile the project on all three platforms, sign the executables when signing keys are provided, and package them as zip archives.
+3. The workflow uploads the archives as assets on the GitHub release page.
+
+You can download the prebuilt binaries from the "Releases" section once the workflow completes.
