@@ -50,6 +50,9 @@ sequoiarecover backup --source /path/to/data --cloud backblaze --bucket my-bucke
 ```
 The `--mode` flag controls whether a **full** or **incremental** backup is performed.
 Incremental mode only archives files that have changed since the previous backup.
+You can control compression with `--compression`. Passing `auto` lets
+SequoiaRecover choose a compression method based on your network speed to help
+reduce transfer costs.
 To run automated backups every hour:
 ```bash
 sequoiarecover schedule --source /path/to/data --bucket my-bucket --interval 3600 --mode incremental

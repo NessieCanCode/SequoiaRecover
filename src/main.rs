@@ -94,15 +94,21 @@ enum Commands {
     },
 }
 
-#[derive(Clone, ValueEnum, Debug)]
+#[derive(Clone, Copy, ValueEnum, Debug, PartialEq)]
 enum CompressionType {
+    /// No compression
     None,
+    /// Use gzip compression
     Gzip,
+    /// Use bzip2 compression
     Bzip2,
+    /// Use zstd compression
     Zstd,
+    /// Automatically select a compression method based on network speed
+    Auto,
 }
 
-#[derive(Clone, ValueEnum, Debug)]
+#[derive(Clone, Copy, ValueEnum, Debug)]
 enum BackupMode {
     Full,
     Incremental,
@@ -121,11 +127,18 @@ fn main() {
             account_id,
             application_key,
         } => {
+            let actual_compression = if compression == CompressionType::Auto {
+                let c = auto_select_compression();
+                println!("Auto selected compression: {:?}", c);
+                c
+            } else {
+                compression
+            };
             println!(
                 "Starting backup from {} to {} bucket {} using {:?}",
-                source, cloud, bucket, compression
+                source, cloud, bucket, actual_compression
             );
-            if let Err(e) = run_backup(&source, &output, compression, mode) {
+            if let Err(e) = run_backup(&source, &output, actual_compression, mode) {
                 eprintln!("Backup failed: {}", e);
             } else {
                 println!("Backup written to {}", output);
@@ -156,9 +169,16 @@ fn main() {
             max_runs,
             mode,
         } => {
+            let actual_compression = if compression == CompressionType::Auto {
+                let c = auto_select_compression();
+                println!("Auto selected compression: {:?}", c);
+                c
+            } else {
+                compression
+            };
             println!(
                 "Scheduling backups every {} seconds from {} to {} bucket {} using {:?}",
-                interval, source, cloud, bucket, compression
+                interval, source, cloud, bucket, actual_compression
             );
             let mut run_count = 0u64;
             loop {
@@ -166,7 +186,7 @@ fn main() {
                     break;
                 }
                 println!("Starting scheduled backup #{}", run_count + 1);
-                if let Err(e) = run_backup(&source, &output, compression.clone(), mode.clone()) {
+                if let Err(e) = run_backup(&source, &output, actual_compression, mode.clone()) {
                     eprintln!("Scheduled backup failed: {}", e);
                 } else {
                     println!("Scheduled backup written to {}", output);
@@ -209,7 +229,13 @@ fn run_backup(
 
     let file = File::create(output)?;
 
-    match compression {
+    let actual = if compression == CompressionType::Auto {
+        auto_select_compression()
+    } else {
+        compression
+    };
+
+    match actual {
         CompressionType::Gzip => {
             let enc = GzEncoder::new(file, GzCompression::default());
             let mut tar = Builder::new(enc);
@@ -237,6 +263,7 @@ fn run_backup(
             add_files(&mut tar, path, mode, &previous, &mut current)?;
             tar.finish()?;
         }
+        CompressionType::Auto => unreachable!(),
     }
 
     let meta_file = File::create(&meta_path)?;
@@ -312,4 +339,39 @@ fn upload_to_backblaze_blocking(
         bucket,
         file_path,
     ))
+}
+
+#[cfg(target_os = "linux")]
+fn detect_link_speed() -> Option<u64> {
+    use std::fs;
+    if let Ok(entries) = fs::read_dir("/sys/class/net") {
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            if name.to_string_lossy() == "lo" {
+                continue;
+            }
+            let speed_path = entry.path().join("speed");
+            if let Ok(speed_str) = fs::read_to_string(speed_path) {
+                if let Ok(speed) = speed_str.trim().parse::<u64>() {
+                    if speed > 0 {
+                        return Some(speed);
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+#[cfg(not(target_os = "linux"))]
+fn detect_link_speed() -> Option<u64> {
+    None
+}
+
+fn auto_select_compression() -> CompressionType {
+    match detect_link_speed().unwrap_or(0) {
+        s if s >= 1000 => CompressionType::None,
+        s if s >= 100 => CompressionType::Gzip,
+        _ => CompressionType::Zstd,
+    }
 }
