@@ -14,6 +14,8 @@
 - Multi-threaded compression support
 - Automated backup scheduling
 - Easy-to-use command-line interface (CLI) with plans for a GUI
+- Basic cross-platform GUI built using [egui](https://github.com/emilk/egui)
+- Optional local backup server for on-premise storage
 - Focus on disaster recovery and business continuity
 - View past backup history
 - Inspect backup contents without extracting
@@ -73,6 +75,15 @@ Restore a backup directly from Backblaze:
 ```bash
 sequoiarecover restore --backup backup.tar --bucket my-bucket --destination /restore/path
 ```
+Run a local backup server to store archives on your own machine:
+```bash
+sequoiarecover serve --address 0.0.0.0:3030 --dir /path/to/storage
+```
+Upload to the server instead of Backblaze:
+```bash
+sequoiarecover backup --source /data --bucket my-bucket \
+    --cloud server --server_url http://localhost:3030
+```
 Check available commands and options:
 ```bash
 sequoiarecover --help
@@ -97,6 +108,16 @@ You can build and run the command-line application on any supported platform usi
 cargo run -- backup --source /path/to/data --bucket my-bucket
 ```
 
+### Running the GUI
+
+A minimal graphical interface is available as a separate binary:
+
+```bash
+cargo run --bin sequoiarecover-gui
+```
+
+The GUI currently supports running a full backup with gzip compression.
+
 ### Backblaze Authentication
 
 Run the following command once to create an encrypted configuration file for your Backblaze credentials:
@@ -106,3 +127,5 @@ sequoiarecover init
 ```
 
 You'll be prompted for your account ID, application key, and an encryption password. After that, the `backup` and `schedule` commands will automatically decrypt the credentials when uploading to Backblaze.
+
+For instructions on using the local server feature see [docs/server.md](docs/server.md).
