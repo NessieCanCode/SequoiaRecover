@@ -46,11 +46,13 @@ Run the backup tool:
 ### Usage
 Example command to perform a backup:
 ```bash
-sequoiarecover backup --source /path/to/data --cloud backblaze --bucket my-bucket
+sequoiarecover backup --source /path/to/data --cloud backblaze --bucket my-bucket --mode full
 ```
+The `--mode` flag controls whether a **full** or **incremental** backup is performed.
+Incremental mode only archives files that have changed since the previous backup.
 To run automated backups every hour:
 ```bash
-sequoiarecover schedule --source /path/to/data --bucket my-bucket --interval 3600
+sequoiarecover schedule --source /path/to/data --bucket my-bucket --interval 3600 --mode incremental
 ```
 Check available commands and options:
 ```bash
