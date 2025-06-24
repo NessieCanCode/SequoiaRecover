@@ -1,7 +1,8 @@
 use backblaze_b2_client::client::B2Client;
 use bzip2::write::BzEncoder;
 use bzip2::Compression as BzCompression;
-use clap::{Parser, Subcommand, ValueEnum};
+use clap::{Parser, Subcommand, ValueEnum, CommandFactory};
+use clap_mangen::Man;
 use chacha20poly1305::{aead::{Aead, KeyInit}, ChaCha20Poly1305, Nonce};
 use rand::rngs::OsRng;
 use pbkdf2::pbkdf2_hmac;
@@ -117,6 +118,8 @@ enum Commands {
     },
     /// Initialize encrypted configuration
     Init,
+    /// Generate the SequoiaRecover man page
+    Manpage,
 }
 
 #[derive(Clone, Copy, ValueEnum, Debug, PartialEq)]
@@ -263,6 +266,13 @@ fn main() {
                     }
                 }
                 Err(e) => eprintln!("{}", e),
+            }
+        }
+        Commands::Manpage => {
+            let cmd = Cli::command();
+            let man = Man::new(cmd);
+            if let Err(e) = man.render(&mut std::io::stdout()) {
+                eprintln!("Failed to generate man page: {}", e);
             }
         }
     }
