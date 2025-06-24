@@ -1,12 +1,17 @@
-mod config;
-mod backup;
-mod remote;
+use sequoiarecover::backup::{
+    auto_select_compression, list_backup, restore_backup, run_backup, BackupMode,
+    CompressionType,
+};
+use sequoiarecover::config::{
+    config_file_path, encrypt_config, load_credentials, show_history, Config,
+};
+use sequoiarecover::remote::{
+    list_remote_backup_blocking, restore_remote_backup_blocking,
+    show_remote_history_blocking, upload_to_backblaze_blocking,
+};
 
-use clap::{Parser, Subcommand, CommandFactory};
+use clap::{CommandFactory, Parser, Subcommand};
 use clap_mangen::Man;
-use backup::{CompressionType, BackupMode, run_backup, auto_select_compression, list_backup, restore_backup};
-use config::{Config, encrypt_config, load_credentials, show_history, config_file_path};
-use remote::{upload_to_backblaze_blocking, show_remote_history_blocking, list_remote_backup_blocking, restore_remote_backup_blocking};
 use std::thread::sleep;
 use std::time::Duration;
 
@@ -135,7 +140,16 @@ enum Commands {
 fn main() {
     let cli = Cli::parse();
     match cli.command {
-        Commands::Backup { source, output, compression, mode, cloud, bucket, account_id, application_key } => {
+        Commands::Backup {
+            source,
+            output,
+            compression,
+            mode,
+            cloud,
+            bucket,
+            account_id,
+            application_key,
+        } => {
             let actual_compression = if compression == CompressionType::Auto {
                 let c = auto_select_compression();
                 println!("Auto selected compression: {:?}", c);
@@ -167,7 +181,18 @@ fn main() {
                 }
             }
         }
-        Commands::Schedule { source, output, compression, cloud, bucket, account_id, application_key, interval, max_runs, mode } => {
+        Commands::Schedule {
+            source,
+            output,
+            compression,
+            cloud,
+            bucket,
+            account_id,
+            application_key,
+            interval,
+            max_runs,
+            mode,
+        } => {
             let actual_compression = if compression == CompressionType::Auto {
                 let c = auto_select_compression();
                 println!("Auto selected compression: {:?}", c);
@@ -208,7 +233,12 @@ fn main() {
                 sleep(Duration::from_secs(interval));
             }
         }
-        Commands::History { bucket, cloud, account_id, application_key } => {
+        Commands::History {
+            bucket,
+            cloud,
+            account_id,
+            application_key,
+        } => {
             if let Some(b) = bucket {
                 if cloud == "backblaze" {
                     match load_credentials(account_id, application_key) {
@@ -224,7 +254,14 @@ fn main() {
                 eprintln!("{}", e);
             }
         }
-        Commands::List { backup, compression, bucket, cloud, account_id, application_key } => {
+        Commands::List {
+            backup,
+            compression,
+            bucket,
+            cloud,
+            account_id,
+            application_key,
+        } => {
             let result = if let Some(b) = bucket {
                 if cloud == "backblaze" {
                     match load_credentials(account_id, application_key) {
@@ -243,7 +280,15 @@ fn main() {
                 eprintln!("{}", e);
             }
         }
-        Commands::Restore { backup, destination, compression, bucket, cloud, account_id, application_key } => {
+        Commands::Restore {
+            backup,
+            destination,
+            compression,
+            bucket,
+            cloud,
+            account_id,
+            application_key,
+        } => {
             let result = if let Some(b) = bucket {
                 if cloud == "backblaze" {
                     match load_credentials(account_id, application_key) {
@@ -269,15 +314,21 @@ fn main() {
         }
         Commands::Init => match config_file_path() {
             Ok(path) => {
-                let account_id = rpassword::prompt_password("Backblaze Account ID: ").unwrap_or_default();
-                let application_key = rpassword::prompt_password("Backblaze Application Key: ").unwrap_or_default();
-                let password = rpassword::prompt_password("Encryption password: ").unwrap_or_default();
+                let account_id =
+                    rpassword::prompt_password("Backblaze Account ID: ").unwrap_or_default();
+                let application_key =
+                    rpassword::prompt_password("Backblaze Application Key: ").unwrap_or_default();
+                let password =
+                    rpassword::prompt_password("Encryption password: ").unwrap_or_default();
                 let confirm = rpassword::prompt_password("Confirm password: ").unwrap_or_default();
                 if password != confirm {
                     eprintln!("Passwords do not match");
                     return;
                 }
-                let cfg = Config { account_id, application_key };
+                let cfg = Config {
+                    account_id,
+                    application_key,
+                };
                 match encrypt_config(&cfg, &password) {
                     Ok(enc) => {
                         if let Some(p) = path.parent() {
@@ -308,6 +359,3 @@ fn main() {
     }
 }
 
-
-#[cfg(test)]
-mod tests;

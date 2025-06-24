@@ -1,7 +1,7 @@
-use super::*;
 use crate::backup::{restore_backup, run_backup, BackupMode, CompressionType};
 use crate::config::{decrypt_config, encrypt_config, Config};
 use crate::remote::{download_from_backblaze_blocking, upload_to_backblaze_blocking};
+use serial_test::serial;
 use std::fs;
 use tempfile::tempdir;
 
@@ -29,6 +29,7 @@ fn test_encrypt_decrypt_wrong_password() {
 }
 
 #[test]
+#[serial]
 fn test_run_and_restore_backup() -> Result<(), Box<dyn std::error::Error>> {
     let dir = tempdir()?;
     let src = dir.path().join("source");
@@ -70,6 +71,7 @@ fn test_run_and_restore_backup() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 #[test]
+#[serial]
 fn test_local_upload_download() -> Result<(), Box<dyn std::error::Error>> {
     let dir = tempdir()?;
     let remote_root = dir.path().join("remote");
@@ -94,6 +96,7 @@ fn test_local_upload_download() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 #[test]
+#[serial]
 fn test_download_missing_bucket() -> Result<(), Box<dyn std::error::Error>> {
     let dir = tempdir()?;
     let remote_root = dir.path().join("remote");

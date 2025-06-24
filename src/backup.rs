@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::error::Error;
 use std::fs::File;
 use std::io::Read;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::{Duration, UNIX_EPOCH};
 
 use bzip2::read::BzDecoder;
@@ -38,7 +38,12 @@ pub enum BackupMode {
     Incremental,
 }
 
-pub fn run_backup(source: &str, output: &str, compression: CompressionType, mode: BackupMode) -> Result<(), Box<dyn Error>> {
+pub fn run_backup(
+    source: &str,
+    output: &str,
+    compression: CompressionType,
+    mode: BackupMode,
+) -> Result<(), Box<dyn Error>> {
     let path = Path::new(source);
     let meta_path = format!("{}.meta", output);
     let previous: HashMap<String, u64> = if let Ok(f) = File::open(&meta_path) {
@@ -93,7 +98,13 @@ pub fn run_backup(source: &str, output: &str, compression: CompressionType, mode
     Ok(())
 }
 
-fn add_files<T: std::io::Write>(tar: &mut Builder<T>, root: &Path, mode: BackupMode, previous: &HashMap<String, u64>, current: &mut HashMap<String, u64>) -> Result<(), Box<dyn Error>> {
+fn add_files<T: std::io::Write>(
+    tar: &mut Builder<T>,
+    root: &Path,
+    mode: BackupMode,
+    previous: &HashMap<String, u64>,
+    current: &mut HashMap<String, u64>,
+) -> Result<(), Box<dyn Error>> {
     for entry in WalkDir::new(root) {
         let entry = entry?;
         if entry.depth() == 0 && entry.file_type().is_dir() {
@@ -128,7 +139,10 @@ fn detect_link_speed() -> Option<u64> {
         if name == "lo" || name.starts_with("lo") {
             continue;
         }
-        start.insert(name.clone(), data.total_received() + data.total_transmitted());
+        start.insert(
+            name.clone(),
+            data.total_received() + data.total_transmitted(),
+        );
     }
     std::thread::sleep(Duration::from_secs(1));
     networks.refresh(true);
@@ -172,7 +186,10 @@ fn guess_compression(path: &str) -> CompressionType {
     }
 }
 
-fn open_archive(path: &str, compression: CompressionType) -> Result<Archive<Box<dyn Read>>, Box<dyn Error>> {
+fn open_archive(
+    path: &str,
+    compression: CompressionType,
+) -> Result<Archive<Box<dyn Read>>, Box<dyn Error>> {
     let file = File::open(path)?;
     let reader: Box<dyn Read> = match compression {
         CompressionType::Gzip => Box::new(GzDecoder::new(file)),
@@ -187,7 +204,7 @@ pub fn list_backup(path: &str, compression: Option<CompressionType>) -> Result<(
     let comp = compression.unwrap_or_else(|| guess_compression(path));
     let mut ar = open_archive(path, comp)?;
     for file in ar.entries()? {
-        let mut entry = file?;
+        let entry = file?;
         let header = entry.header();
         let mtime = header.mtime().unwrap_or(0);
         let mode = header.mode().unwrap_or(0);
@@ -198,10 +215,13 @@ pub fn list_backup(path: &str, compression: Option<CompressionType>) -> Result<(
     Ok(())
 }
 
-pub fn restore_backup(path: &str, destination: &str, compression: Option<CompressionType>) -> Result<(), Box<dyn Error>> {
+pub fn restore_backup(
+    path: &str,
+    destination: &str,
+    compression: Option<CompressionType>,
+) -> Result<(), Box<dyn Error>> {
     let comp = compression.unwrap_or_else(|| guess_compression(path));
     let mut ar = open_archive(path, comp)?;
     ar.unpack(destination)?;
     Ok(())
 }
-
