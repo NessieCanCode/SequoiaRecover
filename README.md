@@ -50,3 +50,11 @@ Check available commands and options:
 ```bash
 sequoiarecover --help
 ```
+
+### Linux CLI
+
+You can build and run the command-line application on Linux using Cargo:
+
+```bash
+cargo run -- backup --source /path/to/data --bucket my-bucket
+```
