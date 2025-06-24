@@ -17,6 +17,7 @@ use num_cpus;
 use serde::{Deserialize, Serialize};
 use sysinfo::Networks;
 use tar::{Archive, Builder};
+use tracing::info;
 use walkdir::WalkDir;
 use zstd::stream::read::Decoder as ZstdDecoder;
 use zstd::stream::write::Encoder as ZstdEncoder;
@@ -210,7 +211,7 @@ pub fn list_backup(path: &str, compression: Option<CompressionType>) -> Result<(
         let mode = header.mode().unwrap_or(0);
         let dt: DateTime<Local> = (UNIX_EPOCH + Duration::from_secs(mtime)).into();
         let path = entry.path()?.display().to_string();
-        println!("{}\t{:o}\t{}", path, mode, dt.format("%Y-%m-%d %H:%M:%S"));
+        info!("{}\t{:o}\t{}", path, mode, dt.format("%Y-%m-%d %H:%M:%S"));
     }
     Ok(())
 }

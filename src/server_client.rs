@@ -5,34 +5,88 @@ use reqwest::blocking::Client;
 use std::error::Error;
 use std::path::Path;
 use std::time::{Duration, UNIX_EPOCH};
+use tracing::{error, info};
 
-pub fn upload_to_server_blocking(server_url: &str, bucket: &str, file_path: &str) -> Result<(), Box<dyn Error>> {
+pub fn upload_to_server_blocking(
+    server_url: &str,
+    bucket: &str,
+    file_path: &str,
+) -> Result<(), Box<dyn Error>> {
     let client = Client::new();
     let data = std::fs::read(file_path)?;
     let name = Path::new(file_path)
         .file_name()
         .ok_or("invalid file")?
         .to_string_lossy();
-    let url = format!("{}/upload/{}/{}", server_url.trim_end_matches('/'), bucket, name);
-    let resp = client.post(url).body(data).send()?;
-    if resp.status().is_success() {
-        Ok(())
-    } else {
-        Err(format!("Upload failed: {}", resp.status()).into())
+    let url = format!(
+        "{}/upload/{}/{}",
+        server_url.trim_end_matches('/'),
+        bucket,
+        name
+    );
+    let mut delay = Duration::from_secs(1);
+    for attempt in 0..3 {
+        let resp = client.post(&url).body(data.clone()).send();
+        match resp {
+            Ok(r) if r.status().is_success() => return Ok(()),
+            Ok(r) => {
+                if attempt == 2 {
+                    return Err(format!("Upload failed: {}", r.status()).into());
+                }
+                error!("Upload attempt {} failed: {}", attempt + 1, r.status());
+            }
+            Err(e) => {
+                if attempt == 2 {
+                    return Err(format!("Upload failed: {}", e).into());
+                }
+                error!("Upload attempt {} error: {}", attempt + 1, e);
+            }
+        }
+        std::thread::sleep(delay);
+        delay *= 2;
     }
+    unreachable!()
 }
 
-pub fn download_from_server_blocking(server_url: &str, bucket: &str, file_name: &str, dest: &Path) -> Result<(), Box<dyn Error>> {
+pub fn download_from_server_blocking(
+    server_url: &str,
+    bucket: &str,
+    file_name: &str,
+    dest: &Path,
+) -> Result<(), Box<dyn Error>> {
     let client = Client::new();
-    let url = format!("{}/download/{}/{}", server_url.trim_end_matches('/'), bucket, file_name);
-    let resp = client.get(url).send()?;
-    if resp.status().is_success() {
-        let bytes = resp.bytes()?;
-        std::fs::write(dest, &bytes)?;
-        Ok(())
-    } else {
-        Err(format!("Download failed: {}", resp.status()).into())
+    let url = format!(
+        "{}/download/{}/{}",
+        server_url.trim_end_matches('/'),
+        bucket,
+        file_name
+    );
+    let mut delay = Duration::from_secs(1);
+    for attempt in 0..3 {
+        let resp = client.get(&url).send();
+        match resp {
+            Ok(r) if r.status().is_success() => {
+                let bytes = r.bytes()?;
+                std::fs::write(dest, &bytes)?;
+                return Ok(());
+            }
+            Ok(r) => {
+                if attempt == 2 {
+                    return Err(format!("Download failed: {}", r.status()).into());
+                }
+                error!("Download attempt {} failed: {}", attempt + 1, r.status());
+            }
+            Err(e) => {
+                if attempt == 2 {
+                    return Err(format!("Download failed: {}", e).into());
+                }
+                error!("Download attempt {} error: {}", attempt + 1, e);
+            }
+        }
+        std::thread::sleep(delay);
+        delay *= 2;
     }
+    unreachable!()
 }
 
 pub fn show_server_history_blocking(server_url: &str, bucket: &str) -> Result<(), Box<dyn Error>> {
@@ -43,7 +97,7 @@ pub fn show_server_history_blocking(server_url: &str, bucket: &str) -> Result<()
         let entries: Vec<FileInfo> = resp.json()?;
         for e in entries {
             let dt: DateTime<Local> = (UNIX_EPOCH + Duration::from_secs(e.modified as u64)).into();
-            println!("{}\t{}", dt.format("%Y-%m-%d %H:%M:%S"), e.name);
+            info!("{}\t{}", dt.format("%Y-%m-%d %H:%M:%S"), e.name);
         }
         Ok(())
     } else {

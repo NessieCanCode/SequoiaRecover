@@ -1,21 +1,19 @@
 use sequoiarecover::backup::{
-    auto_select_compression, list_backup, restore_backup, run_backup, BackupMode,
-    CompressionType,
+    auto_select_compression, list_backup, restore_backup, run_backup, BackupMode, CompressionType,
 };
 use sequoiarecover::config::{
     config_file_path, encrypt_config, load_credentials, show_history, Config,
 };
 use sequoiarecover::remote::{
-    list_remote_backup_blocking, restore_remote_backup_blocking,
-    show_remote_history_blocking, upload_to_backblaze_blocking,
+    list_remote_backup_blocking, restore_remote_backup_blocking, show_remote_history_blocking,
+    upload_to_backblaze_blocking,
 };
 use sequoiarecover::server::run_server;
 use sequoiarecover::server_client::{
-    list_server_backup_blocking,
-    restore_server_backup_blocking,
-    show_server_history_blocking,
+    list_server_backup_blocking, restore_server_backup_blocking, show_server_history_blocking,
     upload_to_server_blocking,
 };
+use tracing_subscriber::EnvFilter;
 
 use clap::{CommandFactory, Parser, Subcommand};
 use clap_mangen::Man;
@@ -169,6 +167,9 @@ enum Commands {
 }
 
 fn main() {
+    tracing_subscriber::fmt()
+        .with_env_filter(EnvFilter::from_default_env())
+        .init();
     let cli = Cli::parse();
     match cli.command {
         Commands::Backup {
@@ -272,7 +273,9 @@ fn main() {
                             Err(e) => eprintln!("{}", e),
                         }
                     } else if cloud == "server" {
-                        let url = server_url.clone().or_else(|| std::env::var("SERVER_URL").ok());
+                        let url = server_url
+                            .clone()
+                            .or_else(|| std::env::var("SERVER_URL").ok());
                         if let Some(u) = url {
                             if let Err(e) = upload_to_server_blocking(&u, &bucket, &output) {
                                 eprintln!("Upload failed: {}", e);
@@ -452,4 +455,3 @@ fn main() {
         }
     }
 }
-
