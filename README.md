@@ -66,3 +66,14 @@ You can build and run the command-line application on Linux using Cargo:
 ```bash
 cargo run -- backup --source /path/to/data --bucket my-bucket
 ```
+
+### Backblaze Authentication
+
+To avoid exposing your credentials on the command line, set the following environment variables before running a backup:
+
+```bash
+export B2_ACCOUNT_ID="your_account_id"
+export B2_APPLICATION_KEY="your_application_key"
+```
+
+The `backup` and `schedule` commands will automatically pick up these variables when uploading to Backblaze.
