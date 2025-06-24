@@ -7,6 +7,8 @@ use num_cpus;
 use std::error::Error;
 use std::fs::File;
 use std::path::Path;
+use std::thread::sleep;
+use std::time::Duration;
 use tar::Builder;
 use zstd::stream::write::Encoder as ZstdEncoder;
 
@@ -41,6 +43,30 @@ enum Commands {
         #[arg(long)]
         bucket: String,
     },
+    /// Schedule automated backups at a fixed interval (in seconds)
+    Schedule {
+        /// Path to the source directory
+        #[arg(long)]
+        source: String,
+        /// Output backup file path
+        #[arg(long, default_value = "backup.tar")]
+        output: String,
+        /// Compression method
+        #[arg(long, value_enum, default_value_t = CompressionType::Gzip)]
+        compression: CompressionType,
+        /// Destination cloud provider. Placeholder for now
+        #[arg(long, default_value = "backblaze")]
+        cloud: String,
+        /// Bucket name in the cloud provider
+        #[arg(long)]
+        bucket: String,
+        /// Interval in seconds between backups
+        #[arg(long, default_value_t = 3600)]
+        interval: u64,
+        /// Maximum number of backups to run (0 for infinite)
+        #[arg(long, default_value_t = 0)]
+        max_runs: u64,
+    },
 }
 
 #[derive(Clone, ValueEnum, Debug)]
@@ -69,6 +95,34 @@ fn main() {
                 eprintln!("Backup failed: {}", e);
             } else {
                 println!("Backup written to {}", output);
+            }
+        }
+        Commands::Schedule {
+            source,
+            output,
+            compression,
+            cloud,
+            bucket,
+            interval,
+            max_runs,
+        } => {
+            println!(
+                "Scheduling backups every {} seconds from {} to {} bucket {} using {:?}",
+                interval, source, cloud, bucket, compression
+            );
+            let mut run_count = 0u64;
+            loop {
+                if max_runs > 0 && run_count >= max_runs {
+                    break;
+                }
+                println!("Starting scheduled backup #{}", run_count + 1);
+                if let Err(e) = run_backup(&source, &output, compression.clone()) {
+                    eprintln!("Scheduled backup failed: {}", e);
+                } else {
+                    println!("Scheduled backup written to {}", output);
+                }
+                run_count += 1;
+                sleep(Duration::from_secs(interval));
             }
         }
     }

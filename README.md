@@ -48,6 +48,10 @@ Example command to perform a backup:
 ```bash
 sequoiarecover backup --source /path/to/data --cloud backblaze --bucket my-bucket
 ```
+To run automated backups every hour:
+```bash
+sequoiarecover schedule --source /path/to/data --bucket my-bucket --interval 3600
+```
 Check available commands and options:
 ```bash
 sequoiarecover --help
