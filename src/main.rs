@@ -27,6 +27,7 @@ use std::collections::HashMap;
 use std::error::Error;
 use std::fs::File;
 use std::io::Read;
+use std::convert::TryInto;
 use std::path::Path;
 use std::path::PathBuf;
 use std::thread::sleep;
@@ -616,9 +617,9 @@ fn encrypt_config(config: &Config, password: &str) -> Result<EncryptedConfig, Bo
     let cipher = ChaCha20Poly1305::new(&key.into());
     let mut nonce_bytes = [0u8; 12];
     OsRng.fill_bytes(&mut nonce_bytes);
-    let nonce = Nonce::from_slice(&nonce_bytes);
+    let nonce: Nonce = nonce_bytes.as_slice().try_into()?;
     let plaintext = serde_json::to_vec(config)?;
-    let ciphertext = cipher.encrypt(nonce, plaintext.as_ref())?;
+    let ciphertext = cipher.encrypt(&nonce, plaintext.as_ref())?;
     Ok(EncryptedConfig {
         salt: general_purpose::STANDARD.encode(&salt),
         nonce: general_purpose::STANDARD.encode(&nonce_bytes),
@@ -633,8 +634,8 @@ fn decrypt_config(enc: &EncryptedConfig, password: &str) -> Result<Config, Box<d
     let mut key = [0u8; 32];
     pbkdf2_hmac::<Sha256>(password.as_bytes(), &salt, 100_000, &mut key);
     let cipher = ChaCha20Poly1305::new(&key.into());
-    let nonce = Nonce::from_slice(&nonce_bytes);
-    let plaintext = cipher.decrypt(nonce, ciphertext.as_ref())?;
+    let nonce: Nonce = nonce_bytes.as_slice().try_into()?;
+    let plaintext = cipher.decrypt(&nonce, ciphertext.as_ref())?;
     Ok(serde_json::from_slice(&plaintext)?)
 }
 
@@ -735,7 +736,7 @@ fn list_backup(path: &str, compression: Option<CompressionType>) -> Result<(), B
     let comp = compression.unwrap_or_else(|| guess_compression(path));
     let mut ar = open_archive(path, comp)?;
     for file in ar.entries()? {
-        let mut entry = file?;
+        let entry = file?;
         let header = entry.header();
         let mtime = header.mtime().unwrap_or(0);
         let mode = header.mode().unwrap_or(0);
@@ -766,7 +767,7 @@ async fn download_from_backblaze(
 ) -> Result<(), Box<dyn Error>> {
     let client = B2Client::new(account_id.to_string(), application_key.to_string()).await?;
     let basic = client.basic_client();
-    let mut resp = basic
+    let resp = basic
         .download_file_by_name(bucket.to_string(), file_name.to_string(), None)
         .await?;
     let data = resp.file.read_all().await?;
