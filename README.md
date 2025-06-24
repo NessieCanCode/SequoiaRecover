@@ -62,6 +62,17 @@ Check available commands and options:
 sequoiarecover --help
 ```
 
+### Generate a man page
+
+You can create a manual page to ship with precompiled binaries:
+
+```bash
+sequoiarecover manpage > sequoiarecover.1
+```
+
+Install `sequoiarecover.1` under your system's `man1` directory so users can run
+`man sequoiarecover` for full documentation.
+
 ### Linux CLI
 
 You can build and run the command-line application on Linux using Cargo:

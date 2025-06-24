@@ -5,6 +5,7 @@ edition = "2021"
 
 [dependencies]
 clap = { version = "4", features = ["derive", "env"] }
+clap_mangen = "0.2"
 tar = "0.4"
 flate2 = "1.0"
 bzip2 = "0.4"
