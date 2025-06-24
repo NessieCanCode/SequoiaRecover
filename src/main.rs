@@ -1,5 +1,8 @@
 use backblaze_b2_client::client::B2Client;
+use backblaze_b2_client::definitions::bodies::B2ListBucketsBody;
+use backblaze_b2_client::definitions::query_params::B2ListFileNamesQueryParameters;
 use bzip2::write::BzEncoder;
+use bzip2::read::BzDecoder;
 use bzip2::Compression as BzCompression;
 use clap::{Parser, Subcommand, ValueEnum, CommandFactory};
 use clap_mangen::Man;
@@ -12,6 +15,7 @@ use base64::{engine::general_purpose, Engine as _};
 use rpassword;
 use serde::{Deserialize, Serialize};
 use flate2::write::GzEncoder;
+use flate2::read::GzDecoder;
 use flate2::Compression as GzCompression;
 use num_cpus;
 use serde_json;
@@ -22,13 +26,17 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::thread::sleep;
 use std::time::{Duration, UNIX_EPOCH};
-use tar::Builder;
+use tar::{Builder, Archive};
 use tokio::fs::File as TokioFile;
 use tokio::runtime::Runtime;
 use walkdir::WalkDir;
 use zstd::stream::write::Encoder as ZstdEncoder;
+use zstd::stream::read::Decoder as ZstdDecoder;
+use chrono::{DateTime, Local};
+use std::io::Read;
 
 const CONFIG_PATH: &str = ".sequoiarecover/config.enc";
+const HISTORY_PATH: &str = ".sequoiarecover/history.json";
 
 #[derive(Serialize, Deserialize)]
 struct Config {
@@ -41,6 +49,14 @@ struct EncryptedConfig {
     salt: String,
     nonce: String,
     ciphertext: String,
+}
+
+#[derive(Serialize, Deserialize)]
+struct HistoryEntry {
+    timestamp: i64,
+    backup: String,
+    mode: BackupMode,
+    compression: CompressionType,
 }
 
 #[derive(Parser)]
@@ -116,13 +132,56 @@ enum Commands {
         #[arg(long, default_value_t = 0)]
         max_runs: u64,
     },
+    /// Show previous backup history
+    History {
+        #[arg(long)]
+        bucket: Option<String>,
+        #[arg(long, default_value = "backblaze")]
+        cloud: String,
+        #[arg(long, env = "B2_ACCOUNT_ID", hide_env_values = true)]
+        account_id: Option<String>,
+        #[arg(long, env = "B2_APPLICATION_KEY", hide_env_values = true)]
+        application_key: Option<String>,
+    },
+    /// List files inside a backup without extracting
+    List {
+        #[arg(long)]
+        backup: String,
+        #[arg(long)]
+        compression: Option<CompressionType>,
+        #[arg(long)]
+        bucket: Option<String>,
+        #[arg(long, default_value = "backblaze")]
+        cloud: String,
+        #[arg(long, env = "B2_ACCOUNT_ID", hide_env_values = true)]
+        account_id: Option<String>,
+        #[arg(long, env = "B2_APPLICATION_KEY", hide_env_values = true)]
+        application_key: Option<String>,
+    },
+    /// Restore files from a backup archive
+    Restore {
+        #[arg(long)]
+        backup: String,
+        #[arg(long)]
+        destination: String,
+        #[arg(long)]
+        compression: Option<CompressionType>,
+        #[arg(long)]
+        bucket: Option<String>,
+        #[arg(long, default_value = "backblaze")]
+        cloud: String,
+        #[arg(long, env = "B2_ACCOUNT_ID", hide_env_values = true)]
+        account_id: Option<String>,
+        #[arg(long, env = "B2_APPLICATION_KEY", hide_env_values = true)]
+        application_key: Option<String>,
+    },
     /// Initialize encrypted configuration
     Init,
     /// Generate the SequoiaRecover man page
     Manpage,
 }
 
-#[derive(Clone, Copy, ValueEnum, Debug, PartialEq)]
+#[derive(Clone, Copy, ValueEnum, Debug, PartialEq, Serialize, Deserialize)]
 enum CompressionType {
     /// No compression
     None,
@@ -136,7 +195,7 @@ enum CompressionType {
     Auto,
 }
 
-#[derive(Clone, Copy, ValueEnum, Debug)]
+#[derive(Clone, Copy, ValueEnum, Debug, Serialize, Deserialize)]
 enum BackupMode {
     Full,
     Incremental,
@@ -237,6 +296,56 @@ fn main() {
                 sleep(Duration::from_secs(interval));
             }
         }
+        Commands::History { bucket, cloud, account_id, application_key } => {
+            if let Some(b) = bucket {
+                if cloud == "backblaze" {
+                    match load_credentials(account_id, application_key) {
+                        Ok((id, key)) => {
+                            if let Err(e) = show_remote_history_blocking(&id, &key, &b) {
+                                eprintln!("{}", e);
+                            }
+                        }
+                        Err(e) => eprintln!("{}", e),
+                    }
+                }
+            } else if let Err(e) = show_history() {
+                eprintln!("{}", e);
+            }
+        }
+        Commands::List { backup, compression, bucket, cloud, account_id, application_key } => {
+            let result = if let Some(b) = bucket {
+                if cloud == "backblaze" {
+                    match load_credentials(account_id, application_key) {
+                        Ok((id, key)) => list_remote_backup_blocking(&id, &key, &b, &backup, compression),
+                        Err(e) => Err(e),
+                    }
+                } else {
+                    Err("Unsupported cloud".into())
+                }
+            } else {
+                list_backup(&backup, compression)
+            };
+            if let Err(e) = result {
+                eprintln!("{}", e);
+            }
+        }
+        Commands::Restore { backup, destination, compression, bucket, cloud, account_id, application_key } => {
+            let result = if let Some(b) = bucket {
+                if cloud == "backblaze" {
+                    match load_credentials(account_id, application_key) {
+                        Ok((id, key)) => restore_remote_backup_blocking(&id, &key, &b, &backup, &destination, compression),
+                        Err(e) => Err(e),
+                    }
+                } else {
+                    Err("Unsupported cloud".into())
+                }
+            } else {
+                restore_backup(&backup, &destination, compression)
+            };
+            if let Err(e) = result {
+                eprintln!("{}", e);
+            }
+        }
         Commands::Init => {
             match config_file_path() {
                 Ok(path) => {
@@ -334,6 +443,7 @@ fn run_backup(
 
     let meta_file = File::create(&meta_path)?;
     serde_json::to_writer_pretty(meta_file, &current)?;
+    record_backup(output, mode, actual)?;
     Ok(())
 }
 
@@ -447,6 +557,11 @@ fn config_file_path() -> Result<PathBuf, Box<dyn Error>> {
     Ok(PathBuf::from(home).join(CONFIG_PATH))
 }
 
+fn history_file_path() -> Result<PathBuf, Box<dyn Error>> {
+    let home = std::env::var("HOME").or_else(|_| std::env::var("USERPROFILE"))?;
+    Ok(PathBuf::from(home).join(HISTORY_PATH))
+}
+
 fn encrypt_config(config: &Config, password: &str) -> Result<EncryptedConfig, Box<dyn Error>> {
     let mut salt = [0u8; 16];
     OsRng.fill_bytes(&mut salt);
@@ -495,4 +610,217 @@ fn load_credentials(
             Ok((config.account_id, config.application_key))
         }
     }
+}
+
+fn record_backup(
+    backup: &str,
+    mode: BackupMode,
+    compression: CompressionType,
+) -> Result<(), Box<dyn Error>> {
+    let path = history_file_path()?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let mut history: Vec<HistoryEntry> = if path.exists() {
+        let f = File::open(&path)?;
+        serde_json::from_reader(f).unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+    history.push(HistoryEntry {
+        timestamp: chrono::Utc::now().timestamp(),
+        backup: backup.to_string(),
+        mode,
+        compression,
+    });
+    let f = File::create(&path)?;
+    serde_json::to_writer_pretty(f, &history)?;
+    Ok(())
+}
+
+fn show_history() -> Result<(), Box<dyn Error>> {
+    let path = history_file_path()?;
+    if !path.exists() {
+        println!("No history available");
+        return Ok(());
+    }
+    let f = File::open(path)?;
+    let history: Vec<HistoryEntry> = serde_json::from_reader(f)?;
+    for entry in history {
+        let dt: DateTime<Local> = (UNIX_EPOCH + Duration::from_secs(entry.timestamp as u64)).into();
+        println!(
+            "{}\t{:?}\t{:?}",
+            dt.format("%Y-%m-%d %H:%M:%S"),
+            entry.mode,
+            entry.backup
+        );
+    }
+    Ok(())
+}
+
+fn guess_compression(path: &str) -> CompressionType {
+    let p = path.to_lowercase();
+    if p.ends_with(".tar.gz") || p.ends_with(".tgz") {
+        CompressionType::Gzip
+    } else if p.ends_with(".tar.bz2") || p.ends_with(".tbz2") {
+        CompressionType::Bzip2
+    } else if p.ends_with(".tar.zst") || p.ends_with(".tzst") {
+        CompressionType::Zstd
+    } else {
+        CompressionType::None
+    }
+}
+
+fn open_archive(path: &str, compression: CompressionType) -> Result<Archive<Box<dyn Read>>, Box<dyn Error>> {
+    let file = File::open(path)?;
+    let reader: Box<dyn Read> = match compression {
+        CompressionType::Gzip => Box::new(GzDecoder::new(file)),
+        CompressionType::Bzip2 => Box::new(BzDecoder::new(file)),
+        CompressionType::Zstd => Box::new(ZstdDecoder::new(file)?),
+        CompressionType::None | CompressionType::Auto => Box::new(file),
+    };
+    Ok(Archive::new(reader))
+}
+
+fn list_backup(path: &str, compression: Option<CompressionType>) -> Result<(), Box<dyn Error>> {
+    let comp = compression.unwrap_or_else(|| guess_compression(path));
+    let mut ar = open_archive(path, comp)?;
+    for file in ar.entries()? {
+        let mut entry = file?;
+        let header = entry.header();
+        let mtime = header.mtime().unwrap_or(0);
+        let mode = header.mode().unwrap_or(0);
+        let dt: DateTime<Local> = (UNIX_EPOCH + Duration::from_secs(mtime)).into();
+        let path = entry.path()?.display().to_string();
+        println!("{}\t{:o}\t{}", path, mode, dt.format("%Y-%m-%d %H:%M:%S"));
+    }
+    Ok(())
+}
+
+fn restore_backup(
+    path: &str,
+    destination: &str,
+    compression: Option<CompressionType>,
+) -> Result<(), Box<dyn Error>> {
+    let comp = compression.unwrap_or_else(|| guess_compression(path));
+    let mut ar = open_archive(path, comp)?;
+    ar.unpack(destination)?;
+    Ok(())
+}
+
+async fn download_from_backblaze(
+    account_id: &str,
+    application_key: &str,
+    bucket: &str,
+    file_name: &str,
+    dest: &Path,
+) -> Result<(), Box<dyn Error>> {
+    let client = B2Client::new(account_id.to_string(), application_key.to_string()).await?;
+    let basic = client.basic_client();
+    let mut resp = basic
+        .download_file_by_name(bucket.to_string(), file_name.to_string(), None)
+        .await?;
+    let data = resp.file.read_all().await?;
+    tokio::fs::write(dest, data).await?;
+    Ok(())
+}
+
+fn download_from_backblaze_blocking(
+    account_id: &str,
+    application_key: &str,
+    bucket: &str,
+    file_name: &str,
+    dest: &Path,
+) -> Result<(), Box<dyn Error>> {
+    let rt = Runtime::new()?;
+    rt.block_on(download_from_backblaze(account_id, application_key, bucket, file_name, dest))
+}
+
+async fn show_remote_history(
+    account_id: &str,
+    application_key: &str,
+    bucket: &str,
+) -> Result<(), Box<dyn Error>> {
+    let client = B2Client::new(account_id.to_string(), application_key.to_string()).await?;
+    let basic = client.basic_client();
+    let buckets = basic
+        .list_buckets(
+            B2ListBucketsBody::builder()
+                .account_id(account_id.to_string())
+                .bucket_name(Some(bucket.to_string()))
+                .build(),
+        )
+        .await?;
+    let bucket_id = buckets
+        .buckets
+        .get(0)
+        .ok_or("Bucket not found")?
+        .bucket_id
+        .clone();
+    let mut next: Option<String> = None;
+    loop {
+        let params = B2ListFileNamesQueryParameters::builder()
+            .bucket_id(bucket_id.clone())
+            .start_file_name(next.clone())
+            .max_file_count(Some(std::num::NonZeroU32::new(1000).unwrap()))
+            .build();
+        let resp = basic.list_file_names(params).await?;
+        for file in resp.files {
+            let dt: DateTime<Local> =
+                (UNIX_EPOCH + Duration::from_millis(file.upload_timestamp)).into();
+            println!("{}\t{}", dt.format("%Y-%m-%d %H:%M:%S"), file.file_name);
+        }
+        if let Some(n) = resp.next_file_name {
+            next = Some(n);
+        } else {
+            break;
+        }
+    }
+    Ok(())
+}
+
+fn show_remote_history_blocking(
+    account_id: &str,
+    application_key: &str,
+    bucket: &str,
+) -> Result<(), Box<dyn Error>> {
+    let rt = Runtime::new()?;
+    rt.block_on(show_remote_history(account_id, application_key, bucket))
+}
+
+fn list_remote_backup_blocking(
+    account_id: &str,
+    application_key: &str,
+    bucket: &str,
+    backup: &str,
+    compression: Option<CompressionType>,
+) -> Result<(), Box<dyn Error>> {
+    let tmp_path = std::env::temp_dir().join(
+        Path::new(backup)
+            .file_name()
+            .unwrap_or_else(|| std::ffi::OsStr::new("backup.tmp")),
+    );
+    download_from_backblaze_blocking(account_id, application_key, bucket, backup, &tmp_path)?;
+    let result = list_backup(tmp_path.to_str().unwrap(), compression);
+    let _ = std::fs::remove_file(&tmp_path);
+    result
+}
+
+fn restore_remote_backup_blocking(
+    account_id: &str,
+    application_key: &str,
+    bucket: &str,
+    backup: &str,
+    destination: &str,
+    compression: Option<CompressionType>,
+) -> Result<(), Box<dyn Error>> {
+    let tmp_path = std::env::temp_dir().join(
+        Path::new(backup)
+            .file_name()
+            .unwrap_or_else(|| std::ffi::OsStr::new("backup.tmp")),
+    );
+    download_from_backblaze_blocking(account_id, application_key, bucket, backup, &tmp_path)?;
+    let result = restore_backup(tmp_path.to_str().unwrap(), destination, compression);
+    let _ = std::fs::remove_file(&tmp_path);
+    result
 }

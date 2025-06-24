@@ -15,6 +15,10 @@
 - Automated backup scheduling
 - Easy-to-use command-line interface (CLI) with plans for a GUI
 - Focus on disaster recovery and business continuity
+- View past backup history
+- Inspect backup contents without extracting
+- Restore files from archives
+- Retrieve and restore backups directly from Backblaze
 
 ---
 
@@ -56,6 +60,18 @@ reduce transfer costs.
 To run automated backups every hour:
 ```bash
 sequoiarecover schedule --source /path/to/data --bucket my-bucket --interval 3600 --mode incremental
+```
+Show previous backups stored in Backblaze:
+```bash
+sequoiarecover history --bucket my-bucket
+```
+List the contents of a backup archive from Backblaze without downloading:
+```bash
+sequoiarecover list --backup backup.tar --bucket my-bucket
+```
+Restore a backup directly from Backblaze:
+```bash
+sequoiarecover restore --backup backup.tar --bucket my-bucket --destination /restore/path
 ```
 Check available commands and options:
 ```bash
