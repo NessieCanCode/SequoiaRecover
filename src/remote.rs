@@ -1,17 +1,21 @@
 use std::error::Error;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
+use crate::backup::{list_backup, restore_backup, CompressionType};
 use backblaze_b2_client::client::B2Client;
 use backblaze_b2_client::definitions::bodies::B2ListBucketsBody;
 use backblaze_b2_client::definitions::query_params::B2ListFileNamesQueryParameters;
-use tokio::fs::File as TokioFile;
-use tokio::runtime::Runtime;
-use crate::backup::{CompressionType, list_backup, restore_backup};
-use std::path::PathBuf;
 use chrono::{DateTime, Local};
 use std::time::{Duration, UNIX_EPOCH};
+use tokio::fs::File as TokioFile;
+use tokio::runtime::Runtime;
 
-async fn upload_to_backblaze(account_id: &str, application_key: &str, bucket: &str, file_path: &str) -> Result<(), Box<dyn Error>> {
+async fn upload_to_backblaze(
+    account_id: &str,
+    application_key: &str,
+    bucket: &str,
+    file_path: &str,
+) -> Result<(), Box<dyn Error>> {
     let client = B2Client::new(account_id.to_string(), application_key.to_string()).await?;
     let file = TokioFile::open(file_path).await?;
     let metadata = file.metadata().await?;
@@ -27,12 +31,36 @@ async fn upload_to_backblaze(account_id: &str, application_key: &str, bucket: &s
     Ok(())
 }
 
-pub fn upload_to_backblaze_blocking(account_id: &str, application_key: &str, bucket: &str, file_path: &str) -> Result<(), Box<dyn Error>> {
-    let rt = Runtime::new()?;
-    rt.block_on(upload_to_backblaze(account_id, application_key, bucket, file_path))
+pub fn upload_to_backblaze_blocking(
+    account_id: &str,
+    application_key: &str,
+    bucket: &str,
+    file_path: &str,
+) -> Result<(), Box<dyn Error>> {
+    if let Ok(local) = std::env::var("LOCAL_B2_DIR") {
+        let bucket_dir = Path::new(&local).join(bucket);
+        std::fs::create_dir_all(&bucket_dir)?;
+        let name = Path::new(file_path).file_name().ok_or("invalid file")?;
+        std::fs::copy(file_path, bucket_dir.join(name))?;
+        Ok(())
+    } else {
+        let rt = Runtime::new()?;
+        rt.block_on(upload_to_backblaze(
+            account_id,
+            application_key,
+            bucket,
+            file_path,
+        ))
+    }
 }
 
-async fn download_from_backblaze(account_id: &str, application_key: &str, bucket: &str, file_name: &str, dest: &Path) -> Result<(), Box<dyn Error>> {
+async fn download_from_backblaze(
+    account_id: &str,
+    application_key: &str,
+    bucket: &str,
+    file_name: &str,
+    dest: &Path,
+) -> Result<(), Box<dyn Error>> {
     let client = B2Client::new(account_id.to_string(), application_key.to_string()).await?;
     let basic = client.basic_client();
     let mut resp = basic
@@ -43,12 +71,37 @@ async fn download_from_backblaze(account_id: &str, application_key: &str, bucket
     Ok(())
 }
 
-pub fn download_from_backblaze_blocking(account_id: &str, application_key: &str, bucket: &str, file_name: &str, dest: &Path) -> Result<(), Box<dyn Error>> {
-    let rt = Runtime::new()?;
-    rt.block_on(download_from_backblaze(account_id, application_key, bucket, file_name, dest))
+pub fn download_from_backblaze_blocking(
+    account_id: &str,
+    application_key: &str,
+    bucket: &str,
+    file_name: &str,
+    dest: &Path,
+) -> Result<(), Box<dyn Error>> {
+    if let Ok(local) = std::env::var("LOCAL_B2_DIR") {
+        let src_path = Path::new(&local).join(bucket).join(file_name);
+        if !src_path.exists() {
+            return Err("File not found".into());
+        }
+        std::fs::copy(src_path, dest)?;
+        Ok(())
+    } else {
+        let rt = Runtime::new()?;
+        rt.block_on(download_from_backblaze(
+            account_id,
+            application_key,
+            bucket,
+            file_name,
+            dest,
+        ))
+    }
 }
 
-async fn show_remote_history(account_id: &str, application_key: &str, bucket: &str) -> Result<(), Box<dyn Error>> {
+async fn show_remote_history(
+    account_id: &str,
+    application_key: &str,
+    bucket: &str,
+) -> Result<(), Box<dyn Error>> {
     let client = B2Client::new(account_id.to_string(), application_key.to_string()).await?;
     let basic = client.basic_client();
     let buckets = basic
@@ -74,7 +127,8 @@ async fn show_remote_history(account_id: &str, application_key: &str, bucket: &s
             .build();
         let resp = basic.list_file_names(params).await?;
         for file in resp.files {
-            let dt: DateTime<Local> = (UNIX_EPOCH + Duration::from_millis(file.upload_timestamp)).into();
+            let dt: DateTime<Local> =
+                (UNIX_EPOCH + Duration::from_millis(file.upload_timestamp)).into();
             println!("{}\t{}", dt.format("%Y-%m-%d %H:%M:%S"), file.file_name);
         }
         if let Some(n) = resp.next_file_name {
@@ -86,12 +140,22 @@ async fn show_remote_history(account_id: &str, application_key: &str, bucket: &s
     Ok(())
 }
 
-pub fn show_remote_history_blocking(account_id: &str, application_key: &str, bucket: &str) -> Result<(), Box<dyn Error>> {
+pub fn show_remote_history_blocking(
+    account_id: &str,
+    application_key: &str,
+    bucket: &str,
+) -> Result<(), Box<dyn Error>> {
     let rt = Runtime::new()?;
     rt.block_on(show_remote_history(account_id, application_key, bucket))
 }
 
-pub fn list_remote_backup_blocking(account_id: &str, application_key: &str, bucket: &str, backup: &str, compression: Option<CompressionType>) -> Result<(), Box<dyn Error>> {
+pub fn list_remote_backup_blocking(
+    account_id: &str,
+    application_key: &str,
+    bucket: &str,
+    backup: &str,
+    compression: Option<CompressionType>,
+) -> Result<(), Box<dyn Error>> {
     let tmp_path = std::env::temp_dir().join(
         Path::new(backup)
             .file_name()
@@ -103,7 +167,14 @@ pub fn list_remote_backup_blocking(account_id: &str, application_key: &str, buck
     result
 }
 
-pub fn restore_remote_backup_blocking(account_id: &str, application_key: &str, bucket: &str, backup: &str, destination: &str, compression: Option<CompressionType>) -> Result<(), Box<dyn Error>> {
+pub fn restore_remote_backup_blocking(
+    account_id: &str,
+    application_key: &str,
+    bucket: &str,
+    backup: &str,
+    destination: &str,
+    compression: Option<CompressionType>,
+) -> Result<(), Box<dyn Error>> {
     let tmp_path = std::env::temp_dir().join(
         Path::new(backup)
             .file_name()
@@ -114,4 +185,3 @@ pub fn restore_remote_backup_blocking(account_id: &str, application_key: &str, b
     let _ = std::fs::remove_file(&tmp_path);
     result
 }
-
