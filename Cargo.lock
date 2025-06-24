@@ -1817,6 +1817,7 @@ dependencies = [
  "subtle",
  "sysinfo",
  "tar",
+ "tempfile",
  "tokio",
  "walkdir",
  "zstd",
