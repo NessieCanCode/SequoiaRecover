@@ -9,6 +9,13 @@ use sequoiarecover::remote::{
     list_remote_backup_blocking, restore_remote_backup_blocking,
     show_remote_history_blocking, upload_to_backblaze_blocking,
 };
+use sequoiarecover::server::run_server;
+use sequoiarecover::server_client::{
+    list_server_backup_blocking,
+    restore_server_backup_blocking,
+    show_server_history_blocking,
+    upload_to_server_blocking,
+};
 
 use clap::{CommandFactory, Parser, Subcommand};
 use clap_mangen::Man;
@@ -54,6 +61,9 @@ enum Commands {
         /// Backblaze application key (can also come from B2_APPLICATION_KEY env var)
         #[arg(long, env = "B2_APPLICATION_KEY", hide_env_values = true)]
         application_key: Option<String>,
+        /// URL of the backup server when using the server cloud option
+        #[arg(long)]
+        server_url: Option<String>,
     },
     /// Schedule automated backups at a fixed interval (in seconds)
     Schedule {
@@ -81,6 +91,9 @@ enum Commands {
         /// Backblaze application key (can also come from B2_APPLICATION_KEY env var)
         #[arg(long, env = "B2_APPLICATION_KEY", hide_env_values = true)]
         application_key: Option<String>,
+        /// URL of the backup server when using the server cloud option
+        #[arg(long)]
+        server_url: Option<String>,
         /// Interval in seconds between backups
         #[arg(long, default_value_t = 3600)]
         interval: u64,
@@ -98,6 +111,9 @@ enum Commands {
         account_id: Option<String>,
         #[arg(long, env = "B2_APPLICATION_KEY", hide_env_values = true)]
         application_key: Option<String>,
+        /// URL of the backup server when using the server cloud option
+        #[arg(long)]
+        server_url: Option<String>,
     },
     /// List files inside a backup without extracting
     List {
@@ -113,6 +129,9 @@ enum Commands {
         account_id: Option<String>,
         #[arg(long, env = "B2_APPLICATION_KEY", hide_env_values = true)]
         application_key: Option<String>,
+        /// URL of the backup server when using the server cloud option
+        #[arg(long)]
+        server_url: Option<String>,
     },
     /// Restore files from a backup archive
     Restore {
@@ -130,6 +149,18 @@ enum Commands {
         account_id: Option<String>,
         #[arg(long, env = "B2_APPLICATION_KEY", hide_env_values = true)]
         application_key: Option<String>,
+        /// URL of the backup server when using the server cloud option
+        #[arg(long)]
+        server_url: Option<String>,
+    },
+    /// Run a local backup server
+    Serve {
+        /// Address to listen on, e.g. 0.0.0.0:3030
+        #[arg(long, default_value = "127.0.0.1:3030")]
+        address: String,
+        /// Directory to store uploaded backups
+        #[arg(long, default_value = "storage")]
+        dir: String,
     },
     /// Initialize encrypted configuration
     Init,
@@ -149,6 +180,7 @@ fn main() {
             bucket,
             account_id,
             application_key,
+            server_url,
         } => {
             let actual_compression = if compression == CompressionType::Auto {
                 let c = auto_select_compression();
@@ -178,6 +210,17 @@ fn main() {
                         }
                         Err(e) => eprintln!("{}", e),
                     }
+                } else if cloud == "server" {
+                    let url = server_url.or_else(|| std::env::var("SERVER_URL").ok());
+                    if let Some(u) = url {
+                        if let Err(e) = upload_to_server_blocking(&u, &bucket, &output) {
+                            eprintln!("Upload failed: {}", e);
+                        } else {
+                            println!("Uploaded to server {}", u);
+                        }
+                    } else {
+                        eprintln!("Missing server_url");
+                    }
                 }
             }
         }
@@ -189,6 +232,7 @@ fn main() {
             bucket,
             account_id,
             application_key,
+            server_url,
             interval,
             max_runs,
             mode,
@@ -227,6 +271,17 @@ fn main() {
                             }
                             Err(e) => eprintln!("{}", e),
                         }
+                    } else if cloud == "server" {
+                        let url = server_url.clone().or_else(|| std::env::var("SERVER_URL").ok());
+                        if let Some(u) = url {
+                            if let Err(e) = upload_to_server_blocking(&u, &bucket, &output) {
+                                eprintln!("Upload failed: {}", e);
+                            } else {
+                                println!("Uploaded to server {}", u);
+                            }
+                        } else {
+                            eprintln!("Missing server_url");
+                        }
                     }
                 }
                 run_count += 1;
@@ -238,6 +293,7 @@ fn main() {
             cloud,
             account_id,
             application_key,
+            server_url,
         } => {
             if let Some(b) = bucket {
                 if cloud == "backblaze" {
@@ -248,6 +304,15 @@ fn main() {
                             }
                         }
                         Err(e) => eprintln!("{}", e),
+                    }
+                } else if cloud == "server" {
+                    let url = server_url.or_else(|| std::env::var("SERVER_URL").ok());
+                    if let Some(u) = url {
+                        if let Err(e) = show_server_history_blocking(&u, &b) {
+                            eprintln!("{}", e);
+                        }
+                    } else {
+                        eprintln!("Missing server_url");
                     }
                 }
             } else if let Err(e) = show_history() {
@@ -261,6 +326,7 @@ fn main() {
             cloud,
             account_id,
             application_key,
+            server_url,
         } => {
             let result = if let Some(b) = bucket {
                 if cloud == "backblaze" {
@@ -269,6 +335,13 @@ fn main() {
                             list_remote_backup_blocking(&id, &key, &b, &backup, compression)
                         }
                         Err(e) => Err(e),
+                    }
+                } else if cloud == "server" {
+                    let url = server_url.or_else(|| std::env::var("SERVER_URL").ok());
+                    if let Some(u) = url {
+                        list_server_backup_blocking(&u, &b, &backup, compression)
+                    } else {
+                        Err("Missing server_url".into())
                     }
                 } else {
                     Err("Unsupported cloud".into())
@@ -288,6 +361,7 @@ fn main() {
             cloud,
             account_id,
             application_key,
+            server_url,
         } => {
             let result = if let Some(b) = bucket {
                 if cloud == "backblaze" {
@@ -302,6 +376,13 @@ fn main() {
                         ),
                         Err(e) => Err(e),
                     }
+                } else if cloud == "server" {
+                    let url = server_url.or_else(|| std::env::var("SERVER_URL").ok());
+                    if let Some(u) = url {
+                        restore_server_backup_blocking(&u, &b, &backup, &destination, compression)
+                    } else {
+                        Err("Missing server_url".into())
+                    }
                 } else {
                     Err("Unsupported cloud".into())
                 }
@@ -309,6 +390,19 @@ fn main() {
                 restore_backup(&backup, &destination, compression)
             };
             if let Err(e) = result {
+                eprintln!("{}", e);
+            }
+        }
+        Commands::Serve { address, dir } => {
+            let addr: std::net::SocketAddr = match address.parse() {
+                Ok(a) => a,
+                Err(e) => {
+                    eprintln!("Invalid address: {}", e);
+                    return;
+                }
+            };
+            let rt = tokio::runtime::Runtime::new().expect("runtime");
+            if let Err(e) = rt.block_on(run_server(addr, dir.into())) {
                 eprintln!("{}", e);
             }
         }
