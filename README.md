@@ -10,6 +10,8 @@
 - Incremental and full backups
 - Integration with cloud storage providers (initially Backblaze B2)
 - Secure, efficient data transfer and storage
+- Recursive directory backups
+- Multi-threaded compression support
 - Automated backup scheduling
 - Easy-to-use command-line interface (CLI) with plans for a GUI
 - Focus on disaster recovery and business continuity

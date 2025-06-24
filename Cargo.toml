@@ -8,3 +8,5 @@ clap = { version = "4", features = ["derive"] }
 tar = "0.4"
 flate2 = "1.0"
 bzip2 = "0.4"
+zstd = { version = "0.13", features = ["zstdmt"] }
+num_cpus = "1"

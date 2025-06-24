@@ -1,12 +1,14 @@
+use bzip2::write::BzEncoder;
+use bzip2::Compression as BzCompression;
 use clap::{Parser, Subcommand, ValueEnum};
+use flate2::write::GzEncoder;
+use flate2::Compression as GzCompression;
+use num_cpus;
 use std::error::Error;
 use std::fs::File;
 use std::path::Path;
 use tar::Builder;
-use flate2::write::GzEncoder;
-use flate2::Compression as GzCompression;
-use bzip2::write::BzEncoder;
-use bzip2::Compression as BzCompression;
+use zstd::stream::write::Encoder as ZstdEncoder;
 
 #[derive(Parser)]
 #[command(
@@ -46,6 +48,7 @@ enum CompressionType {
     None,
     Gzip,
     Bzip2,
+    Zstd,
 }
 
 fn main() {
@@ -71,26 +74,55 @@ fn main() {
     }
 }
 
-fn run_backup(source: &str, output: &str, compression: CompressionType) -> Result<(), Box<dyn Error>> {
+fn run_backup(
+    source: &str,
+    output: &str,
+    compression: CompressionType,
+) -> Result<(), Box<dyn Error>> {
     let file = File::create(output)?;
+    let path = Path::new(source);
     match compression {
         CompressionType::Gzip => {
             let enc = GzEncoder::new(file, GzCompression::default());
             let mut tar = Builder::new(enc);
-            tar.append_dir_all(".", Path::new(source))?;
+            if path.is_dir() {
+                tar.append_dir_all(".", path)?;
+            } else {
+                tar.append_path_with_name(path, path.file_name().unwrap())?;
+            }
             let enc = tar.into_inner()?;
             enc.finish()?;
         }
         CompressionType::Bzip2 => {
             let enc = BzEncoder::new(file, BzCompression::default());
             let mut tar = Builder::new(enc);
-            tar.append_dir_all(".", Path::new(source))?;
+            if path.is_dir() {
+                tar.append_dir_all(".", path)?;
+            } else {
+                tar.append_path_with_name(path, path.file_name().unwrap())?;
+            }
+            let enc = tar.into_inner()?;
+            enc.finish()?;
+        }
+        CompressionType::Zstd => {
+            let mut enc = ZstdEncoder::new(file, 0)?;
+            enc.multithread(num_cpus::get() as u32)?;
+            let mut tar = Builder::new(enc);
+            if path.is_dir() {
+                tar.append_dir_all(".", path)?;
+            } else {
+                tar.append_path_with_name(path, path.file_name().unwrap())?;
+            }
             let enc = tar.into_inner()?;
             enc.finish()?;
         }
         CompressionType::None => {
             let mut tar = Builder::new(file);
-            tar.append_dir_all(".", Path::new(source))?;
+            if path.is_dir() {
+                tar.append_dir_all(".", path)?;
+            } else {
+                tar.append_path_with_name(path, path.file_name().unwrap())?;
+            }
             tar.finish()?;
         }
     }
