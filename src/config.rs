@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use std::time::{Duration, UNIX_EPOCH};
 use chrono::{DateTime, Local};
 use base64::{engine::general_purpose, Engine as _};
-use chacha20poly1305::{aead::{Aead, KeyInit}, ChaCha20Poly1305, Nonce};
+use chacha20poly1305::{aead::{Aead, KeyInit}, ChaCha20Poly1305};
 use pbkdf2::pbkdf2_hmac;
 use rand::rngs::OsRng;
 use rand::RngCore;
@@ -56,7 +56,10 @@ pub fn encrypt_config(config: &Config, password: &str) -> Result<EncryptedConfig
     let cipher = ChaCha20Poly1305::new(&key.into());
     let mut nonce_bytes = [0u8; 12];
     OsRng.fill_bytes(&mut nonce_bytes);
-    let nonce = Nonce::from_slice(&nonce_bytes);
+    let nonce = nonce_bytes
+        .as_slice()
+        .try_into()
+        .expect("nonce length mismatch");
     let plaintext = serde_json::to_vec(config)?;
     let ciphertext = cipher.encrypt(nonce, plaintext.as_ref())?;
     Ok(EncryptedConfig {
@@ -73,7 +76,10 @@ pub fn decrypt_config(enc: &EncryptedConfig, password: &str) -> Result<Config, B
     let mut key = [0u8; 32];
     pbkdf2_hmac::<Sha256>(password.as_bytes(), &salt, 100_000, &mut key);
     let cipher = ChaCha20Poly1305::new(&key.into());
-    let nonce = Nonce::from_slice(&nonce_bytes);
+    let nonce = nonce_bytes
+        .as_slice()
+        .try_into()
+        .expect("nonce length mismatch");
     let plaintext = cipher.decrypt(nonce, ciphertext.as_ref())?;
     Ok(serde_json::from_slice(&plaintext)?)
 }
