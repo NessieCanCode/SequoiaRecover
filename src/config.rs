@@ -1,16 +1,19 @@
+use base64::{engine::general_purpose, Engine as _};
+use chacha20poly1305::{
+    aead::{Aead, KeyInit},
+    ChaCha20Poly1305,
+};
+use chrono::{DateTime, Local};
+use pbkdf2::pbkdf2_hmac;
+use rand::rngs::OsRng;
+use rand::RngCore;
+use rpassword;
 use serde::{Deserialize, Serialize};
+use sha2::Sha256;
 use std::error::Error;
 use std::fs::File;
 use std::path::PathBuf;
 use std::time::{Duration, UNIX_EPOCH};
-use chrono::{DateTime, Local};
-use base64::{engine::general_purpose, Engine as _};
-use chacha20poly1305::{aead::{Aead, KeyInit}, ChaCha20Poly1305};
-use pbkdf2::pbkdf2_hmac;
-use rand::rngs::OsRng;
-use rand::RngCore;
-use sha2::Sha256;
-use rpassword;
 
 use crate::backup::{BackupMode, CompressionType};
 
@@ -84,7 +87,10 @@ pub fn decrypt_config(enc: &EncryptedConfig, password: &str) -> Result<Config, B
     Ok(serde_json::from_slice(&plaintext)?)
 }
 
-pub fn load_credentials(account_id: Option<String>, application_key: Option<String>) -> Result<(String, String), Box<dyn Error>> {
+pub fn load_credentials(
+    account_id: Option<String>,
+    application_key: Option<String>,
+) -> Result<(String, String), Box<dyn Error>> {
     match (account_id, application_key) {
         (Some(id), Some(key)) => Ok((id, key)),
         _ => {
@@ -101,7 +107,11 @@ pub fn load_credentials(account_id: Option<String>, application_key: Option<Stri
     }
 }
 
-pub fn record_backup(backup: &str, mode: BackupMode, compression: CompressionType) -> Result<(), Box<dyn Error>> {
+pub fn record_backup(
+    backup: &str,
+    mode: BackupMode,
+    compression: CompressionType,
+) -> Result<(), Box<dyn Error>> {
     let path = history_file_path()?;
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
@@ -133,8 +143,12 @@ pub fn show_history() -> Result<(), Box<dyn Error>> {
     let history: Vec<HistoryEntry> = serde_json::from_reader(f)?;
     for entry in history {
         let dt: DateTime<Local> = (UNIX_EPOCH + Duration::from_secs(entry.timestamp as u64)).into();
-        println!("{}\t{:?}\t{:?}", dt.format("%Y-%m-%d %H:%M:%S"), entry.mode, entry.backup);
+        println!(
+            "{}\t{:?}\t{:?}",
+            dt.format("%Y-%m-%d %H:%M:%S"),
+            entry.mode,
+            entry.backup
+        );
     }
     Ok(())
 }
-

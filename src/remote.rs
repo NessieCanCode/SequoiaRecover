@@ -63,7 +63,7 @@ async fn download_from_backblaze(
 ) -> Result<(), Box<dyn Error>> {
     let client = B2Client::new(account_id.to_string(), application_key.to_string()).await?;
     let basic = client.basic_client();
-    let mut resp = basic
+    let resp = basic
         .download_file_by_name(bucket.to_string(), file_name.to_string(), None)
         .await?;
     let data = resp.file.read_all().await?;
