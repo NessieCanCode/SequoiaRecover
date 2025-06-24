@@ -72,11 +72,10 @@ cargo run -- backup --source /path/to/data --bucket my-bucket
 
 ### Backblaze Authentication
 
-To avoid exposing your credentials on the command line, set the following environment variables before running a backup:
+Run the following command once to create an encrypted configuration file for your Backblaze credentials:
 
 ```bash
-export B2_ACCOUNT_ID="your_account_id"
-export B2_APPLICATION_KEY="your_application_key"
+sequoiarecover init
 ```
 
-The `backup` and `schedule` commands will automatically pick up these variables when uploading to Backblaze.
+You'll be prompted for your account ID, application key, and an encryption password. After that, the `backup` and `schedule` commands will automatically decrypt the credentials when uploading to Backblaze.
