@@ -1,18 +1,22 @@
+use backblaze_b2_client::client::B2Client;
 use bzip2::write::BzEncoder;
 use bzip2::Compression as BzCompression;
 use clap::{Parser, Subcommand, ValueEnum};
-use serde_json;
-use std::collections::HashMap;
 use flate2::write::GzEncoder;
 use flate2::Compression as GzCompression;
 use num_cpus;
+use serde_json;
+use std::collections::HashMap;
 use std::error::Error;
 use std::fs::File;
 use std::path::Path;
+use std::path::PathBuf;
 use std::thread::sleep;
 use std::time::{Duration, UNIX_EPOCH};
-use walkdir::WalkDir;
 use tar::Builder;
+use tokio::fs::File as TokioFile;
+use tokio::runtime::Runtime;
+use walkdir::WalkDir;
 use zstd::stream::write::Encoder as ZstdEncoder;
 
 #[derive(Parser)]
@@ -48,6 +52,12 @@ enum Commands {
         /// Bucket name in the cloud provider
         #[arg(long)]
         bucket: String,
+        /// Backblaze account ID (can also come from B2_ACCOUNT_ID env var)
+        #[arg(long, env = "B2_ACCOUNT_ID", hide_env_values = true)]
+        account_id: Option<String>,
+        /// Backblaze application key (can also come from B2_APPLICATION_KEY env var)
+        #[arg(long, env = "B2_APPLICATION_KEY", hide_env_values = true)]
+        application_key: Option<String>,
     },
     /// Schedule automated backups at a fixed interval (in seconds)
     Schedule {
@@ -69,6 +79,12 @@ enum Commands {
         /// Bucket name in the cloud provider
         #[arg(long)]
         bucket: String,
+        /// Backblaze account ID (can also come from B2_ACCOUNT_ID env var)
+        #[arg(long, env = "B2_ACCOUNT_ID", hide_env_values = true)]
+        account_id: Option<String>,
+        /// Backblaze application key (can also come from B2_APPLICATION_KEY env var)
+        #[arg(long, env = "B2_APPLICATION_KEY", hide_env_values = true)]
+        application_key: Option<String>,
         /// Interval in seconds between backups
         #[arg(long, default_value_t = 3600)]
         interval: u64,
@@ -102,6 +118,8 @@ fn main() {
             mode,
             cloud,
             bucket,
+            account_id,
+            application_key,
         } => {
             println!(
                 "Starting backup from {} to {} bucket {} using {:?}",
@@ -111,6 +129,19 @@ fn main() {
                 eprintln!("Backup failed: {}", e);
             } else {
                 println!("Backup written to {}", output);
+                if cloud == "backblaze" {
+                    match (&account_id, &application_key) {
+                        (Some(id), Some(key)) => {
+                            if let Err(e) = upload_to_backblaze_blocking(id, key, &bucket, &output)
+                            {
+                                eprintln!("Upload failed: {}", e);
+                            } else {
+                                println!("Uploaded to Backblaze bucket {}", bucket);
+                            }
+                        }
+                        _ => eprintln!("Missing Backblaze credentials"),
+                    }
+                }
             }
         }
         Commands::Schedule {
@@ -119,6 +150,8 @@ fn main() {
             compression,
             cloud,
             bucket,
+            account_id,
+            application_key,
             interval,
             max_runs,
             mode,
@@ -137,6 +170,20 @@ fn main() {
                     eprintln!("Scheduled backup failed: {}", e);
                 } else {
                     println!("Scheduled backup written to {}", output);
+                    if cloud == "backblaze" {
+                        match (&account_id, &application_key) {
+                            (Some(id), Some(key)) => {
+                                if let Err(e) =
+                                    upload_to_backblaze_blocking(id, key, &bucket, &output)
+                                {
+                                    eprintln!("Upload failed: {}", e);
+                                } else {
+                                    println!("Uploaded to Backblaze bucket {}", bucket);
+                                }
+                            }
+                            _ => eprintln!("Missing Backblaze credentials"),
+                        }
+                    }
                 }
                 run_count += 1;
                 sleep(Duration::from_secs(interval));
@@ -221,9 +268,7 @@ fn add_files<T: std::io::Write>(
             current.insert(rel_str.clone(), mtime);
             let include = match mode {
                 BackupMode::Full => true,
-                BackupMode::Incremental => previous
-                    .get(&rel_str)
-                    .map_or(true, |old| *old < mtime),
+                BackupMode::Incremental => previous.get(&rel_str).map_or(true, |old| *old < mtime),
             };
             if include {
                 tar.append_path_with_name(path, rel)?;
@@ -231,4 +276,40 @@ fn add_files<T: std::io::Write>(
         }
     }
     Ok(())
+}
+
+async fn upload_to_backblaze(
+    account_id: &str,
+    application_key: &str,
+    bucket: &str,
+    file_path: &str,
+) -> Result<(), Box<dyn Error>> {
+    let client = B2Client::new(account_id.to_string(), application_key.to_string()).await?;
+    let file = TokioFile::open(file_path).await?;
+    let metadata = file.metadata().await?;
+    let name = PathBuf::from(file_path)
+        .file_name()
+        .ok_or("invalid file")?
+        .to_string_lossy()
+        .to_string();
+    let upload = client
+        .create_upload(file, name, bucket.to_string(), None, metadata.len(), None)
+        .await;
+    upload.start().await?;
+    Ok(())
+}
+
+fn upload_to_backblaze_blocking(
+    account_id: &str,
+    application_key: &str,
+    bucket: &str,
+    file_path: &str,
+) -> Result<(), Box<dyn Error>> {
+    let rt = Runtime::new()?;
+    rt.block_on(upload_to_backblaze(
+        account_id,
+        application_key,
+        bucket,
+        file_path,
+    ))
 }
