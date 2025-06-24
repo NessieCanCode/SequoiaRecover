@@ -2,6 +2,14 @@ use backblaze_b2_client::client::B2Client;
 use bzip2::write::BzEncoder;
 use bzip2::Compression as BzCompression;
 use clap::{Parser, Subcommand, ValueEnum};
+use chacha20poly1305::{aead::{Aead, KeyInit}, ChaCha20Poly1305, Nonce};
+use rand::rngs::OsRng;
+use pbkdf2::pbkdf2_hmac;
+use sha2::Sha256;
+use rand::RngCore;
+use base64::{engine::general_purpose, Engine as _};
+use rpassword;
+use serde::{Deserialize, Serialize};
 use flate2::write::GzEncoder;
 use flate2::Compression as GzCompression;
 use num_cpus;
@@ -18,6 +26,21 @@ use tokio::fs::File as TokioFile;
 use tokio::runtime::Runtime;
 use walkdir::WalkDir;
 use zstd::stream::write::Encoder as ZstdEncoder;
+
+const CONFIG_PATH: &str = ".sequoiarecover/config.enc";
+
+#[derive(Serialize, Deserialize)]
+struct Config {
+    account_id: String,
+    application_key: String,
+}
+
+#[derive(Serialize, Deserialize)]
+struct EncryptedConfig {
+    salt: String,
+    nonce: String,
+    ciphertext: String,
+}
 
 #[derive(Parser)]
 #[command(
@@ -92,6 +115,8 @@ enum Commands {
         #[arg(long, default_value_t = 0)]
         max_runs: u64,
     },
+    /// Initialize encrypted configuration
+    Init,
 }
 
 #[derive(Clone, Copy, ValueEnum, Debug, PartialEq)]
@@ -143,16 +168,16 @@ fn main() {
             } else {
                 println!("Backup written to {}", output);
                 if cloud == "backblaze" {
-                    match (&account_id, &application_key) {
-                        (Some(id), Some(key)) => {
-                            if let Err(e) = upload_to_backblaze_blocking(id, key, &bucket, &output)
+                    match load_credentials(account_id, application_key) {
+                        Ok((id, key)) => {
+                            if let Err(e) = upload_to_backblaze_blocking(&id, &key, &bucket, &output)
                             {
                                 eprintln!("Upload failed: {}", e);
                             } else {
                                 println!("Uploaded to Backblaze bucket {}", bucket);
                             }
                         }
-                        _ => eprintln!("Missing Backblaze credentials"),
+                        Err(e) => eprintln!("{}", e),
                     }
                 }
             }
@@ -191,22 +216,53 @@ fn main() {
                 } else {
                     println!("Scheduled backup written to {}", output);
                     if cloud == "backblaze" {
-                        match (&account_id, &application_key) {
-                            (Some(id), Some(key)) => {
+                        match load_credentials(account_id.clone(), application_key.clone()) {
+                            Ok((id, key)) => {
                                 if let Err(e) =
-                                    upload_to_backblaze_blocking(id, key, &bucket, &output)
+                                    upload_to_backblaze_blocking(&id, &key, &bucket, &output)
                                 {
                                     eprintln!("Upload failed: {}", e);
                                 } else {
                                     println!("Uploaded to Backblaze bucket {}", bucket);
                                 }
                             }
-                            _ => eprintln!("Missing Backblaze credentials"),
+                            Err(e) => eprintln!("{}", e),
                         }
                     }
                 }
                 run_count += 1;
                 sleep(Duration::from_secs(interval));
+            }
+        }
+        Commands::Init => {
+            match config_file_path() {
+                Ok(path) => {
+                    let account_id = rpassword::prompt_password("Backblaze Account ID: ").unwrap_or_default();
+                    let application_key = rpassword::prompt_password("Backblaze Application Key: ").unwrap_or_default();
+                    let password = rpassword::prompt_password("Encryption password: ").unwrap_or_default();
+                    let confirm = rpassword::prompt_password("Confirm password: ").unwrap_or_default();
+                    if password != confirm {
+                        eprintln!("Passwords do not match");
+                        return;
+                    }
+                    let cfg = Config { account_id, application_key };
+                    match encrypt_config(&cfg, &password) {
+                        Ok(enc) => {
+                            if let Some(p) = path.parent() { let _ = std::fs::create_dir_all(p); }
+                            if let Ok(f) = File::create(&path) {
+                                if serde_json::to_writer_pretty(f, &enc).is_ok() {
+                                    println!("Config written to {:?}", path);
+                                } else {
+                                    eprintln!("Failed to write config");
+                                }
+                            } else {
+                                eprintln!("Could not create config file");
+                            }
+                        }
+                        Err(e) => eprintln!("Failed to encrypt config: {}", e),
+                    }
+                }
+                Err(e) => eprintln!("{}", e),
             }
         }
     }
@@ -373,5 +429,60 @@ fn auto_select_compression() -> CompressionType {
         s if s >= 1000 => CompressionType::None,
         s if s >= 100 => CompressionType::Gzip,
         _ => CompressionType::Zstd,
+    }
+}
+
+fn config_file_path() -> Result<PathBuf, Box<dyn Error>> {
+    let home = std::env::var("HOME").or_else(|_| std::env::var("USERPROFILE"))?;
+    Ok(PathBuf::from(home).join(CONFIG_PATH))
+}
+
+fn encrypt_config(config: &Config, password: &str) -> Result<EncryptedConfig, Box<dyn Error>> {
+    let mut salt = [0u8; 16];
+    OsRng.fill_bytes(&mut salt);
+    let mut key = [0u8; 32];
+    pbkdf2_hmac::<Sha256>(password.as_bytes(), &salt, 100_000, &mut key);
+    let cipher = ChaCha20Poly1305::new(&key.into());
+    let mut nonce_bytes = [0u8; 12];
+    OsRng.fill_bytes(&mut nonce_bytes);
+    let nonce = Nonce::from_slice(&nonce_bytes);
+    let plaintext = serde_json::to_vec(config)?;
+    let ciphertext = cipher.encrypt(nonce, plaintext.as_ref())?;
+    Ok(EncryptedConfig {
+        salt: general_purpose::STANDARD.encode(&salt),
+        nonce: general_purpose::STANDARD.encode(&nonce_bytes),
+        ciphertext: general_purpose::STANDARD.encode(&ciphertext),
+    })
+}
+
+fn decrypt_config(enc: &EncryptedConfig, password: &str) -> Result<Config, Box<dyn Error>> {
+    let salt = general_purpose::STANDARD.decode(&enc.salt)?;
+    let nonce_bytes = general_purpose::STANDARD.decode(&enc.nonce)?;
+    let ciphertext = general_purpose::STANDARD.decode(&enc.ciphertext)?;
+    let mut key = [0u8; 32];
+    pbkdf2_hmac::<Sha256>(password.as_bytes(), &salt, 100_000, &mut key);
+    let cipher = ChaCha20Poly1305::new(&key.into());
+    let nonce = Nonce::from_slice(&nonce_bytes);
+    let plaintext = cipher.decrypt(nonce, ciphertext.as_ref())?;
+    Ok(serde_json::from_slice(&plaintext)?)
+}
+
+fn load_credentials(
+    account_id: Option<String>,
+    application_key: Option<String>,
+) -> Result<(String, String), Box<dyn Error>> {
+    match (account_id, application_key) {
+        (Some(id), Some(key)) => Ok((id, key)),
+        _ => {
+            let path = config_file_path()?;
+            if !path.exists() {
+                return Err("Missing credentials".into());
+            }
+            let password = rpassword::prompt_password("Config password: ")?;
+            let reader = File::open(path)?;
+            let enc: EncryptedConfig = serde_json::from_reader(reader)?;
+            let config = decrypt_config(&enc, &password)?;
+            Ok((config.account_id, config.application_key))
+        }
     }
 }
