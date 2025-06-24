@@ -89,9 +89,9 @@ sequoiarecover manpage > sequoiarecover.1
 Install `sequoiarecover.1` under your system's `man1` directory so users can run
 `man sequoiarecover` for full documentation.
 
-### Linux CLI
+### CLI Usage
 
-You can build and run the command-line application on Linux using Cargo:
+You can build and run the command-line application on any supported platform using Cargo:
 
 ```bash
 cargo run -- backup --source /path/to/data --bucket my-bucket
