@@ -33,10 +33,22 @@ pub enum CompressionType {
     Auto,
 }
 
+impl Default for CompressionType {
+    fn default() -> Self {
+        CompressionType::Gzip
+    }
+}
+
 #[derive(Clone, Copy, ValueEnum, Debug, Serialize, Deserialize, PartialEq)]
 pub enum BackupMode {
     Full,
     Incremental,
+}
+
+impl Default for BackupMode {
+    fn default() -> Self {
+        BackupMode::Full
+    }
 }
 
 fn count_files(
