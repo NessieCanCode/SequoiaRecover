@@ -2,7 +2,8 @@ use sequoiarecover::backup::{
     auto_select_compression, list_backup, restore_backup, run_backup, BackupMode, CompressionType,
 };
 use sequoiarecover::config::{
-    config_file_path, encrypt_config, load_credentials, show_history, Config,
+    config_file_path, encrypt_config, load_credentials, show_history,
+    store_credentials_keyring, Config,
 };
 use sequoiarecover::remote::{
     list_remote_backup_blocking, restore_remote_backup_blocking, show_remote_history_blocking,
@@ -59,6 +60,9 @@ enum Commands {
         /// Backblaze application key (can also come from B2_APPLICATION_KEY env var)
         #[arg(long, env = "B2_APPLICATION_KEY", hide_env_values = true)]
         application_key: Option<String>,
+        /// Store credentials in OS keychain
+        #[arg(long, default_value_t = false)]
+        keyring: bool,
         /// URL of the backup server when using the server cloud option
         #[arg(long)]
         server_url: Option<String>,
@@ -92,6 +96,9 @@ enum Commands {
         /// Backblaze application key (can also come from B2_APPLICATION_KEY env var)
         #[arg(long, env = "B2_APPLICATION_KEY", hide_env_values = true)]
         application_key: Option<String>,
+        /// Retrieve credentials from the keychain
+        #[arg(long, default_value_t = false)]
+        keyring: bool,
         /// URL of the backup server when using the server cloud option
         #[arg(long)]
         server_url: Option<String>,
@@ -115,6 +122,9 @@ enum Commands {
         account_id: Option<String>,
         #[arg(long, env = "B2_APPLICATION_KEY", hide_env_values = true)]
         application_key: Option<String>,
+        /// Retrieve credentials from keychain
+        #[arg(long, default_value_t = false)]
+        keyring: bool,
         /// URL of the backup server when using the server cloud option
         #[arg(long)]
         server_url: Option<String>,
@@ -133,6 +143,9 @@ enum Commands {
         account_id: Option<String>,
         #[arg(long, env = "B2_APPLICATION_KEY", hide_env_values = true)]
         application_key: Option<String>,
+        /// Retrieve credentials from keychain
+        #[arg(long, default_value_t = false)]
+        keyring: bool,
         /// URL of the backup server when using the server cloud option
         #[arg(long)]
         server_url: Option<String>,
@@ -153,6 +166,9 @@ enum Commands {
         account_id: Option<String>,
         #[arg(long, env = "B2_APPLICATION_KEY", hide_env_values = true)]
         application_key: Option<String>,
+        /// Retrieve credentials from keychain
+        #[arg(long, default_value_t = false)]
+        keyring: bool,
         /// URL of the backup server when using the server cloud option
         #[arg(long)]
         server_url: Option<String>,
@@ -167,7 +183,11 @@ enum Commands {
         dir: String,
     },
     /// Initialize encrypted configuration
-    Init,
+    Init {
+        /// Store credentials in the OS keychain
+        #[arg(long, default_value_t = false)]
+        keyring: bool,
+    },
     /// Generate the SequoiaRecover man page
     Manpage,
 }
@@ -187,6 +207,7 @@ fn main() {
             bucket,
             account_id,
             application_key,
+            keyring,
             server_url,
             compression_threshold,
         } => {
@@ -206,7 +227,7 @@ fn main() {
             } else {
                 println!("Backup written to {}", output);
                 if cloud == "backblaze" {
-                    match load_credentials(account_id, application_key) {
+                    match load_credentials(account_id, application_key, keyring) {
                         Ok((id, key)) => {
                             if let Err(e) =
                                 upload_to_backblaze_blocking(&id, &key, &bucket, &output)
@@ -240,6 +261,7 @@ fn main() {
             bucket,
             account_id,
             application_key,
+            keyring,
             server_url,
             compression_threshold,
             interval,
@@ -268,7 +290,7 @@ fn main() {
                 } else {
                     println!("Scheduled backup written to {}", output);
                     if cloud == "backblaze" {
-                        match load_credentials(account_id.clone(), application_key.clone()) {
+                        match load_credentials(account_id.clone(), application_key.clone(), keyring) {
                             Ok((id, key)) => {
                                 if let Err(e) =
                                     upload_to_backblaze_blocking(&id, &key, &bucket, &output)
@@ -304,11 +326,12 @@ fn main() {
             cloud,
             account_id,
             application_key,
+            keyring,
             server_url,
         } => {
             if let Some(b) = bucket {
                 if cloud == "backblaze" {
-                    match load_credentials(account_id, application_key) {
+                    match load_credentials(account_id, application_key, keyring) {
                         Ok((id, key)) => {
                             if let Err(e) = show_remote_history_blocking(&id, &key, &b) {
                                 eprintln!("{}", e);
@@ -337,11 +360,12 @@ fn main() {
             cloud,
             account_id,
             application_key,
+            keyring,
             server_url,
         } => {
             let result = if let Some(b) = bucket {
                 if cloud == "backblaze" {
-                    match load_credentials(account_id, application_key) {
+                    match load_credentials(account_id, application_key, keyring) {
                         Ok((id, key)) => {
                             list_remote_backup_blocking(&id, &key, &b, &backup, compression)
                         }
@@ -372,11 +396,12 @@ fn main() {
             cloud,
             account_id,
             application_key,
+            keyring,
             server_url,
         } => {
             let result = if let Some(b) = bucket {
                 if cloud == "backblaze" {
-                    match load_credentials(account_id, application_key) {
+                    match load_credentials(account_id, application_key, keyring) {
                         Ok((id, key)) => restore_remote_backup_blocking(
                             &id,
                             &key,
@@ -417,39 +442,46 @@ fn main() {
                 eprintln!("{}", e);
             }
         }
-        Commands::Init => match config_file_path() {
+        Commands::Init { keyring } => match config_file_path() {
             Ok(path) => {
                 let account_id =
                     rpassword::prompt_password("Backblaze Account ID: ").unwrap_or_default();
                 let application_key =
                     rpassword::prompt_password("Backblaze Application Key: ").unwrap_or_default();
-                let password =
-                    rpassword::prompt_password("Encryption password: ").unwrap_or_default();
-                let confirm = rpassword::prompt_password("Confirm password: ").unwrap_or_default();
-                if password != confirm {
-                    eprintln!("Passwords do not match");
-                    return;
-                }
-                let cfg = Config {
-                    account_id,
-                    application_key,
-                };
-                match encrypt_config(&cfg, &password) {
-                    Ok(enc) => {
-                        if let Some(p) = path.parent() {
-                            let _ = std::fs::create_dir_all(p);
-                        }
-                        if let Ok(f) = std::fs::File::create(&path) {
-                            if serde_json::to_writer_pretty(f, &enc).is_ok() {
-                                println!("Config written to {:?}", path);
-                            } else {
-                                eprintln!("Failed to write config");
-                            }
-                        } else {
-                            eprintln!("Could not create config file");
-                        }
+                if keyring {
+                    match store_credentials_keyring(&account_id, &application_key) {
+                        Ok(_) => println!("Credentials stored in keyring"),
+                        Err(e) => eprintln!("Failed to store in keyring: {}", e),
                     }
-                    Err(e) => eprintln!("Failed to encrypt config: {}", e),
+                } else {
+                    let password =
+                        rpassword::prompt_password("Encryption password: ").unwrap_or_default();
+                    let confirm = rpassword::prompt_password("Confirm password: ").unwrap_or_default();
+                    if password != confirm {
+                        eprintln!("Passwords do not match");
+                        return;
+                    }
+                    let cfg = Config {
+                        account_id,
+                        application_key,
+                    };
+                    match encrypt_config(&cfg, &password) {
+                        Ok(enc) => {
+                            if let Some(p) = path.parent() {
+                                let _ = std::fs::create_dir_all(p);
+                            }
+                            if let Ok(f) = std::fs::File::create(&path) {
+                                if serde_json::to_writer_pretty(f, &enc).is_ok() {
+                                    println!("Config written to {:?}", path);
+                                } else {
+                                    eprintln!("Failed to write config");
+                                }
+                            } else {
+                                eprintln!("Could not create config file");
+                            }
+                        }
+                        Err(e) => eprintln!("Failed to encrypt config: {}", e),
+                    }
                 }
             }
             Err(e) => eprintln!("{}", e),
