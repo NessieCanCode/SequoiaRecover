@@ -33,7 +33,7 @@ pub enum CompressionType {
     Auto,
 }
 
-#[derive(Clone, Copy, ValueEnum, Debug, Serialize, Deserialize)]
+#[derive(Clone, Copy, ValueEnum, Debug, Serialize, Deserialize, PartialEq)]
 pub enum BackupMode {
     Full,
     Incremental,
