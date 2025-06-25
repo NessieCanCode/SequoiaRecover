@@ -7,6 +7,11 @@ use sequoiarecover::backup::{
 use sequoiarecover::config::{
     config_file_path, encrypt_config, history_file_path, Config, HistoryEntry,
 };
+use eframe::egui::{self, ComboBox};
+use sequoiarecover::backup::{
+    restore_backup, run_backup_with_progress, BackupMode, CompressionType,
+};
+use sequoiarecover::config::{history_file_path, HistoryEntry};
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
 
@@ -24,6 +29,8 @@ struct GuiConfig {
     compression: CompressionType,
     #[serde(default)]
     mode: BackupMode,
+    restore_path: String,
+    restore_dest: String,
 }
 
 enum Tab {
@@ -114,6 +121,7 @@ impl eframe::App for App {
                 {
                     self.tab = Tab::Settings;
                 }
+
             });
         });
 
@@ -191,6 +199,66 @@ impl eframe::App for App {
                     ui.label("Backup file:");
                     ui.text_edit_singleline(&mut self.restore_path);
                 });
+                });
+                ComboBox::from_label("Compression")
+                    .selected_text(format!("{:?}", self.compression))
+                    .show_ui(ui, |ui| {
+                        ui.selectable_value(&mut self.compression, CompressionType::None, "None");
+                        ui.selectable_value(&mut self.compression, CompressionType::Gzip, "Gzip");
+                        ui.selectable_value(&mut self.compression, CompressionType::Bzip2, "Bzip2");
+                        ui.selectable_value(&mut self.compression, CompressionType::Zstd, "Zstd");
+                    });
+                ComboBox::from_label("Mode")
+                    .selected_text(format!("{:?}", self.mode))
+                    .show_ui(ui, |ui| {
+                        ui.selectable_value(&mut self.mode, BackupMode::Full, "Full");
+                        ui.selectable_value(&mut self.mode, BackupMode::Incremental, "Incremental");
+                    });
+                if ui.button("Run Backup").clicked() {
+                    let source = self.source.clone();
+                    let output = self.output.clone();
+                    let compression = self.compression;
+                    let mode = self.mode;
+                    let status = self.status.clone();
+                    let progress = self.progress.clone();
+                    std::thread::spawn(move || {
+                        let res = run_backup_with_progress(
+                            &source,
+                            &output,
+                            compression,
+                            mode,
+                            |d, t| {
+                                let mut p = progress.lock().unwrap();
+                                if t > 0 {
+                                    *p = d as f32 / t as f32;
+                                }
+                            },
+                        );
+                        let mut s = status.lock().unwrap();
+                        *s = match res {
+                            Ok(_) => "Backup complete".to_string(),
+                            Err(e) => format!("Error: {}", e),
+                        };
+                    });
+                    save_config(&GuiConfig {
+                        source: self.source.clone(),
+                        output: self.output.clone(),
+                        restore_path: self.restore_path.clone(),
+                        restore_dest: self.restore_dest.clone(),
+                    });
+                    self.history = load_history();
+                }
+                let msg = self.status.lock().unwrap().clone();
+                ui.label(msg);
+                let value = *self.progress.lock().unwrap();
+                ui.add(egui::ProgressBar::new(value).show_percentage());
+            }
+            Tab::Restore => {
+                ui.heading("Restore Backup");
+                ui.horizontal(|ui| {
+                    ui.label("Backup file:");
+                    ui.text_edit_singleline(&mut self.restore_path);
+                });
                 ui.horizontal(|ui| {
                     ui.label("Destination:");
                     ui.text_edit_singleline(&mut self.restore_dest);
@@ -227,6 +295,8 @@ impl eframe::App for App {
                     egui::ScrollArea::vertical().show(ui, |ui| {
                         for entry in &self.history {
                             let dt = chrono::Local.timestamp_opt(entry.timestamp, 0).unwrap();
+                            let dt = chrono::NaiveDateTime::from_timestamp_opt(entry.timestamp, 0)
+                                .unwrap_or_default();
                             ui.horizontal(|ui| {
                                 ui.label(dt.format("%Y-%m-%d %H:%M:%S").to_string());
                                 ui.label(format!("{:?}", entry.mode));
@@ -310,6 +380,8 @@ fn main() -> Result<(), eframe::Error> {
                 output: cfg.output,
                 compression: cfg.compression,
                 mode: cfg.mode,
+                compression: CompressionType::Gzip,
+                mode: BackupMode::Full,
                 restore_path: cfg.restore_path,
                 restore_dest: cfg.restore_dest,
                 history: load_history(),

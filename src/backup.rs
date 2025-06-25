@@ -312,7 +312,7 @@ fn add_files_progress<T: std::io::Write>(
             current.insert(rel_str.clone(), mtime);
             let include = match mode {
                 BackupMode::Full => true,
-                BackupMode::Incremental => previous.get(&rel_str).map_or(true, |old| *old < mtime),
+                BackupMode::Incremental => previous.get(&rel_str).is_none_or(|old| *old < mtime),
             };
             if include {
                 tar.append_path_with_name(path, rel)?;

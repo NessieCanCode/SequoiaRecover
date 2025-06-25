@@ -4,6 +4,7 @@ use chacha20poly1305::{
     ChaCha20Poly1305,
 };
 use chrono::{DateTime, Local};
+use keyring::Entry;
 use pbkdf2::pbkdf2_hmac;
 use rand::rngs::OsRng;
 use rand::RngCore;
@@ -19,6 +20,7 @@ use crate::backup::{BackupMode, CompressionType};
 
 pub const CONFIG_PATH: &str = ".sequoiarecover/config.enc";
 pub const HISTORY_PATH: &str = ".sequoiarecover/history.json";
+pub const KEYRING_SERVICE: &str = "sequoiarecover";
 
 #[derive(Serialize, Deserialize)]
 pub struct Config {
@@ -66,8 +68,8 @@ pub fn encrypt_config(config: &Config, password: &str) -> Result<EncryptedConfig
     let plaintext = serde_json::to_vec(config)?;
     let ciphertext = cipher.encrypt(nonce, plaintext.as_ref())?;
     Ok(EncryptedConfig {
-        salt: general_purpose::STANDARD.encode(&salt),
-        nonce: general_purpose::STANDARD.encode(&nonce_bytes),
+        salt: general_purpose::STANDARD.encode(salt),
+        nonce: general_purpose::STANDARD.encode(nonce_bytes),
         ciphertext: general_purpose::STANDARD.encode(&ciphertext),
     })
 }
@@ -87,22 +89,56 @@ pub fn decrypt_config(enc: &EncryptedConfig, password: &str) -> Result<Config, B
     Ok(serde_json::from_slice(&plaintext)?)
 }
 
+fn load_credentials_file() -> Result<(String, String), Box<dyn Error>> {
+    let path = config_file_path()?;
+    if !path.exists() {
+        return Err("Missing credentials".into());
+    }
+    let password = rpassword::prompt_password("Config password: ")?;
+    let reader = File::open(path)?;
+    let enc: EncryptedConfig = serde_json::from_reader(reader)?;
+    let config = decrypt_config(&enc, &password)?;
+    Ok((config.account_id, config.application_key))
+}
+
+fn load_credentials_keyring() -> Result<(String, String), Box<dyn Error>> {
+    let id_entry = Entry::new(KEYRING_SERVICE, "account_id")?;
+    let key_entry = Entry::new(KEYRING_SERVICE, "application_key")?;
+    let id = id_entry.get_password()?;
+    let key = key_entry.get_password()?;
+    Ok((id, key))
+}
+
+pub fn store_credentials_keyring(
+    account_id: &str,
+    application_key: &str,
+) -> Result<(), Box<dyn Error>> {
+    let id_entry = Entry::new(KEYRING_SERVICE, "account_id")?;
+    let key_entry = Entry::new(KEYRING_SERVICE, "application_key")?;
+    id_entry.set_password(account_id)?;
+    key_entry.set_password(application_key)?;
+    Ok(())
+}
+
 pub fn load_credentials(
     account_id: Option<String>,
     application_key: Option<String>,
+    use_keyring: bool,
 ) -> Result<(String, String), Box<dyn Error>> {
     match (account_id, application_key) {
         (Some(id), Some(key)) => Ok((id, key)),
         _ => {
-            let path = config_file_path()?;
-            if !path.exists() {
-                return Err("Missing credentials".into());
+            if use_keyring {
+                match load_credentials_keyring() {
+                    Ok(creds) => Ok(creds),
+                    Err(e) => {
+                        eprintln!("Keyring error: {}. Falling back to config file", e);
+                        load_credentials_file()
+                    }
+                }
+            } else {
+                load_credentials_file()
             }
-            let password = rpassword::prompt_password("Config password: ")?;
-            let reader = File::open(path)?;
-            let enc: EncryptedConfig = serde_json::from_reader(reader)?;
-            let config = decrypt_config(&enc, &password)?;
-            Ok((config.account_id, config.application_key))
         }
     }
 }
