@@ -2,9 +2,13 @@ use crate::backup::{
     auto_select_compression, restore_backup, run_backup, BackupMode, CompressionType,
 };
 use crate::config::{decrypt_config, encrypt_config, Config};
+use crate::remote::show_remote_history_blocking;
 use crate::remote::{download_from_backblaze_blocking, upload_to_backblaze_blocking};
+use filetime::FileTime;
 use serial_test::serial;
+use sha2::{Digest, Sha256};
 use std::fs;
+use std::time::{Duration, SystemTime};
 use tempfile::tempdir;
 
 #[test]
@@ -86,6 +90,13 @@ fn test_local_upload_download() -> Result<(), Box<dyn std::error::Error>> {
 
     let stored = remote_root.join("bucket").join("data.txt");
     assert!(stored.exists());
+    let expected = {
+        let data = fs::read(&src_file)?;
+        format!("{:x}", Sha256::digest(&data))
+    };
+    let remote_data = fs::read(&stored)?;
+    let remote_sum = format!("{:x}", Sha256::digest(&remote_data));
+    assert_eq!(expected, remote_sum);
 
     let dest_file = dir.path().join("out.txt");
     download_from_backblaze_blocking("id", "key", "bucket", "data.txt", &dest_file)?;
@@ -107,6 +118,33 @@ fn test_download_missing_bucket() -> Result<(), Box<dyn std::error::Error>> {
     let dest_file = dir.path().join("out.txt");
     let res = download_from_backblaze_blocking("id", "key", "missing", "nope.txt", &dest_file);
     assert!(res.is_err());
+
+    std::env::remove_var("LOCAL_B2_DIR");
+    Ok(())
+}
+
+#[test]
+#[serial]
+fn test_retention_cleanup() -> Result<(), Box<dyn std::error::Error>> {
+    let dir = tempdir()?;
+    let remote_root = dir.path().join("remote");
+    std::env::set_var("LOCAL_B2_DIR", &remote_root);
+    let bucket_dir = remote_root.join("bucket");
+    fs::create_dir_all(&bucket_dir)?;
+    fs::write(bucket_dir.join("old.txt"), b"old")?;
+    fs::write(bucket_dir.join("new.txt"), b"new")?;
+    let old_time =
+        FileTime::from_system_time(SystemTime::now() - Duration::from_secs(3 * 24 * 3600));
+    filetime::set_file_mtime(bucket_dir.join("old.txt"), old_time)?;
+
+    show_remote_history_blocking(
+        "id",
+        "key",
+        "bucket",
+        Some(Duration::from_secs(2 * 24 * 3600)),
+    )?;
+    assert!(!bucket_dir.join("old.txt").exists());
+    assert!(bucket_dir.join("new.txt").exists());
 
     std::env::remove_var("LOCAL_B2_DIR");
     Ok(())

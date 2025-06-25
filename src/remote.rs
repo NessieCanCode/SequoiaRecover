@@ -1,21 +1,40 @@
 use std::error::Error;
+use std::fs::File;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use crate::backup::{list_backup, restore_backup, CompressionType};
 use backblaze_b2_client::client::B2Client;
+use backblaze_b2_client::definitions::bodies::B2DeleteFileVersionBody;
 use backblaze_b2_client::definitions::bodies::B2ListBucketsBody;
 use backblaze_b2_client::definitions::query_params::B2ListFileNamesQueryParameters;
 use chrono::{DateTime, Local};
-use std::time::{Duration, UNIX_EPOCH};
+use sha2::{Digest, Sha256};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::fs::File as TokioFile;
 use tokio::runtime::Runtime;
 use tracing::{error, info};
+
+fn file_sha256(path: &Path) -> Result<String, Box<dyn Error>> {
+    let mut file = File::open(path)?;
+    let mut hasher = Sha256::new();
+    let mut buf = [0u8; 8192];
+    loop {
+        let n = file.read(&mut buf)?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buf[..n]);
+    }
+    Ok(format!("{:x}", hasher.finalize()))
+}
 
 async fn upload_to_backblaze(
     account_id: &str,
     application_key: &str,
     bucket: &str,
     file_path: &str,
+    checksum: &str,
 ) -> Result<(), Box<dyn Error>> {
     let client = B2Client::new(account_id.to_string(), application_key.to_string()).await?;
     let file = TokioFile::open(file_path).await?;
@@ -26,9 +45,28 @@ async fn upload_to_backblaze(
         .to_string_lossy()
         .to_string();
     let upload = client
-        .create_upload(file, name, bucket.to_string(), None, metadata.len(), None)
+        .create_upload(
+            file,
+            name.clone(),
+            bucket.to_string(),
+            None,
+            metadata.len(),
+            None,
+        )
         .await;
     upload.start().await?;
+    // verify checksum by re-downloading the file
+    let basic = client.basic_client();
+    let resp = basic
+        .download_file_by_name(bucket.to_string(), name.clone(), None)
+        .await?;
+    let data = resp.file.read_all().await?;
+    let mut hasher = Sha256::new();
+    hasher.update(&data);
+    let remote = format!("{:x}", hasher.finalize());
+    if remote != checksum {
+        return Err("Checksum mismatch after upload".into());
+    }
     Ok(())
 }
 
@@ -38,11 +76,17 @@ pub fn upload_to_backblaze_blocking(
     bucket: &str,
     file_path: &str,
 ) -> Result<(), Box<dyn Error>> {
+    let checksum = file_sha256(Path::new(file_path))?;
     if let Ok(local) = std::env::var("LOCAL_B2_DIR") {
         let bucket_dir = Path::new(&local).join(bucket);
         std::fs::create_dir_all(&bucket_dir)?;
         let name = Path::new(file_path).file_name().ok_or("invalid file")?;
-        std::fs::copy(file_path, bucket_dir.join(name))?;
+        let dest = bucket_dir.join(name);
+        std::fs::copy(file_path, &dest)?;
+        let remote = file_sha256(&dest)?;
+        if remote != checksum {
+            return Err("Checksum mismatch after upload".into());
+        }
         Ok(())
     } else {
         let rt = Runtime::new()?;
@@ -53,6 +97,7 @@ pub fn upload_to_backblaze_blocking(
                 application_key,
                 bucket,
                 file_path,
+                &checksum,
             )) {
                 Ok(_) => return Ok(()),
                 Err(e) => {
@@ -132,6 +177,7 @@ async fn show_remote_history(
     account_id: &str,
     application_key: &str,
     bucket: &str,
+    retention: Option<Duration>,
 ) -> Result<(), Box<dyn Error>> {
     let client = B2Client::new(account_id.to_string(), application_key.to_string()).await?;
     let basic = client.basic_client();
@@ -158,9 +204,21 @@ async fn show_remote_history(
             .build();
         let resp = basic.list_file_names(params).await?;
         for file in resp.files {
-            let dt: DateTime<Local> =
-                (UNIX_EPOCH + Duration::from_millis(file.upload_timestamp)).into();
+            let file_time = UNIX_EPOCH + Duration::from_millis(file.upload_timestamp);
+            let dt: DateTime<Local> = file_time.into();
             info!("{}\t{}", dt.format("%Y-%m-%d %H:%M:%S"), file.file_name);
+            if let Some(r) = retention {
+                if SystemTime::now().duration_since(file_time)? > r {
+                    let _ = basic
+                        .delete_file_version(
+                            B2DeleteFileVersionBody::builder()
+                                .file_name(file.file_name.clone())
+                                .file_id(file.file_id.clone())
+                                .build(),
+                        )
+                        .await?;
+                }
+            }
         }
         if let Some(n) = resp.next_file_name {
             next = Some(n);
@@ -175,9 +233,40 @@ pub fn show_remote_history_blocking(
     account_id: &str,
     application_key: &str,
     bucket: &str,
+    retention: Option<Duration>,
 ) -> Result<(), Box<dyn Error>> {
-    let rt = Runtime::new()?;
-    rt.block_on(show_remote_history(account_id, application_key, bucket))
+    if let Ok(local) = std::env::var("LOCAL_B2_DIR") {
+        let dir = Path::new(&local).join(bucket);
+        if let Ok(entries) = std::fs::read_dir(&dir) {
+            for e in entries.flatten() {
+                if let Ok(meta) = e.metadata() {
+                    if meta.is_file() {
+                        let ts = meta.modified()?.duration_since(UNIX_EPOCH)?;
+                        let dt: DateTime<Local> = (UNIX_EPOCH + ts).into();
+                        info!(
+                            "{}\t{}",
+                            dt.format("%Y-%m-%d %H:%M:%S"),
+                            e.file_name().to_string_lossy()
+                        );
+                        if let Some(r) = retention {
+                            if SystemTime::now().duration_since(UNIX_EPOCH + ts)? > r {
+                                let _ = std::fs::remove_file(e.path());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        Ok(())
+    } else {
+        let rt = Runtime::new()?;
+        rt.block_on(show_remote_history(
+            account_id,
+            application_key,
+            bucket,
+            retention,
+        ))
+    }
 }
 
 pub fn list_remote_backup_blocking(
