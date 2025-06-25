@@ -142,6 +142,19 @@ RUST_LOG=info sequoiarecover backup --source /data --bucket my-bucket
 
 Use `debug` for even more verbose logs.
 
+### Running Backblaze integration tests
+
+Some integration tests interact with Backblaze B2. To enable them set the
+following environment variables before running `cargo test`:
+
+```bash
+export B2_ACCOUNT_ID=your_account_id
+export B2_APPLICATION_KEY=your_application_key
+export B2_BUCKET=your_test_bucket
+```
+
+If these variables are not defined the Backblaze tests are skipped.
+
 ## Release Process
 
 SequoiaRecover uses GitHub Actions to build binaries for Windows, macOS and Linux whenever a new version tag is pushed. The workflow is defined in `.github/workflows/release.yml` and can also be triggered manually from the GitHub web UI.
