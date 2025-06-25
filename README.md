@@ -142,6 +142,45 @@ RUST_LOG=info sequoiarecover backup --source /data --bucket my-bucket
 
 Use `debug` for even more verbose logs.
 
+## Typical Workflows
+
+The commands below illustrate a common backup cycle.
+
+1. Set up credentials with `sequoiarecover init`.
+2. Run a full backup:
+   ```bash
+   sequoiarecover backup --source /data --bucket my-bucket --mode full
+   ```
+3. Schedule incremental backups:
+   ```bash
+   sequoiarecover schedule --source /data --bucket my-bucket --interval 3600 \
+       --mode incremental
+   ```
+4. Review stored archives:
+   ```bash
+   sequoiarecover history --bucket my-bucket
+   ```
+5. Restore files when needed:
+   ```bash
+   sequoiarecover restore --backup backup.tar --bucket my-bucket \
+       --destination /restore/path
+   ```
+
+For additional commands and server usage details, run `man sequoiarecover` and
+see [docs/server.md](docs/server.md).
+
+## Troubleshooting
+
+- **Authentication errors** – Rerun `sequoiarecover init` to ensure your
+  Backblaze credentials are correct and unlocked. Verify the encryption password
+  matches the one used during initialization.
+- **Network failures** – Check your internet connectivity and proxy settings.
+  Retry the command after a stable connection is established. Use
+  `RUST_LOG=debug` for more verbose output.
+- **File permission issues** – Confirm the user running the command has read
+  access to source files and write access to the destination directory or
+  server.
+
 ## Release Process
 
 SequoiaRecover uses GitHub Actions to build binaries for Windows, macOS and Linux whenever a new version tag is pushed. The workflow is defined in `.github/workflows/release.yml` and can also be triggered manually from the GitHub web UI.
