@@ -45,6 +45,7 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
 keyring = "2"
 directories = "5"
+rfd = "0.15"
 
 
 [dev-dependencies]

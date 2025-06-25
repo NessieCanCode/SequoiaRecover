@@ -1,12 +1,15 @@
 use chrono::TimeZone;
 use directories::ProjectDirs;
 use eframe::egui::{self, ComboBox, TextEdit};
+use rfd::FileDialog;
 use sequoiarecover::backup::{
     restore_backup, run_backup_with_progress, BackupMode, CompressionType,
 };
 use sequoiarecover::config::{
     config_file_path, encrypt_config, history_file_path, Config, HistoryEntry,
 };
+use sequoiarecover::remote::restore_remote_backup_blocking;
+use sequoiarecover::server_client::restore_server_backup_blocking;
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
 
@@ -24,6 +27,20 @@ struct GuiConfig {
     compression: CompressionType,
     #[serde(default)]
     mode: BackupMode,
+    #[serde(default)]
+    restore_method: RestoreMethod,
+    #[serde(default)]
+    bucket: String,
+    #[serde(default)]
+    server_url: String,
+}
+
+#[derive(Serialize, Deserialize, PartialEq, Clone, Debug, Default)]
+enum RestoreMethod {
+    #[default]
+    Local,
+    Backblaze,
+    Server,
 }
 
 enum Tab {
@@ -39,8 +56,11 @@ struct App {
     output: String,
     compression: CompressionType,
     mode: BackupMode,
+    restore_method: RestoreMethod,
     restore_path: String,
     restore_dest: String,
+    bucket: String,
+    server_url: String,
     history: Vec<HistoryEntry>,
     status: Arc<Mutex<String>>,
     progress: Arc<Mutex<f32>>,
@@ -123,10 +143,20 @@ impl eframe::App for App {
                 ui.horizontal(|ui| {
                     ui.label("Source:");
                     ui.text_edit_singleline(&mut self.source);
+                    if ui.button("Browse").clicked() {
+                        if let Some(p) = FileDialog::new().pick_folder() {
+                            self.source = p.display().to_string();
+                        }
+                    }
                 });
                 ui.horizontal(|ui| {
                     ui.label("Output:");
                     ui.text_edit_singleline(&mut self.output);
+                    if ui.button("Browse").clicked() {
+                        if let Some(p) = FileDialog::new().save_file() {
+                            self.output = p.display().to_string();
+                        }
+                    }
                 });
                 ComboBox::from_label("Compression")
                     .selected_text(format!("{:?}", self.compression))
@@ -176,6 +206,9 @@ impl eframe::App for App {
                         restore_dest: self.restore_dest.clone(),
                         compression: self.compression,
                         mode: self.mode,
+                        restore_method: self.restore_method.clone(),
+                        bucket: self.bucket.clone(),
+                        server_url: self.server_url.clone(),
                     });
                     self.history = load_history();
                 }
@@ -187,20 +220,91 @@ impl eframe::App for App {
             }
             Tab::Restore => {
                 ui.heading("Restore Backup");
-                ui.horizontal(|ui| {
-                    ui.label("Backup file:");
-                    ui.text_edit_singleline(&mut self.restore_path);
-                });
+                ComboBox::from_label("Method")
+                    .selected_text(format!("{:?}", self.restore_method))
+                    .show_ui(ui, |ui| {
+                        ui.selectable_value(
+                            &mut self.restore_method,
+                            RestoreMethod::Local,
+                            "Local",
+                        );
+                        ui.selectable_value(
+                            &mut self.restore_method,
+                            RestoreMethod::Backblaze,
+                            "Backblaze",
+                        );
+                        ui.selectable_value(
+                            &mut self.restore_method,
+                            RestoreMethod::Server,
+                            "Server",
+                        );
+                    });
+                match self.restore_method {
+                    RestoreMethod::Local => {
+                        ui.horizontal(|ui| {
+                            ui.label("Backup file:");
+                            ui.text_edit_singleline(&mut self.restore_path);
+                            if ui.button("Browse").clicked() {
+                                if let Some(p) = FileDialog::new().pick_file() {
+                                    self.restore_path = p.display().to_string();
+                                }
+                            }
+                        });
+                    }
+                    RestoreMethod::Backblaze | RestoreMethod::Server => {
+                        ui.horizontal(|ui| {
+                            ui.label("Bucket:");
+                            ui.text_edit_singleline(&mut self.bucket);
+                        });
+                        if self.restore_method == RestoreMethod::Server {
+                            ui.horizontal(|ui| {
+                                ui.label("Server URL:");
+                                ui.text_edit_singleline(&mut self.server_url);
+                            });
+                        }
+                        ui.horizontal(|ui| {
+                            ui.label("Backup name:");
+                            ui.text_edit_singleline(&mut self.restore_path);
+                        });
+                    }
+                }
                 ui.horizontal(|ui| {
                     ui.label("Destination:");
                     ui.text_edit_singleline(&mut self.restore_dest);
+                    if ui.button("Browse").clicked() {
+                        if let Some(p) = FileDialog::new().pick_folder() {
+                            self.restore_dest = p.display().to_string();
+                        }
+                    }
                 });
                 if ui.button("Restore").clicked() {
                     let src = self.restore_path.clone();
                     let dst = self.restore_dest.clone();
+                    let bucket = self.bucket.clone();
+                    let method = self.restore_method.clone();
+                    let server_url = self.server_url.clone();
+                    let account_id = self.account_id.clone();
+                    let application_key = self.application_key.clone();
                     let status = self.status.clone();
                     std::thread::spawn(move || {
-                        let res = restore_backup(&src, &dst, None);
+                        let res = match method {
+                            RestoreMethod::Local => restore_backup(&src, &dst, None),
+                            RestoreMethod::Backblaze => restore_remote_backup_blocking(
+                                &account_id,
+                                &application_key,
+                                &bucket,
+                                &src,
+                                &dst,
+                                None,
+                            ),
+                            RestoreMethod::Server => restore_server_backup_blocking(
+                                &server_url,
+                                &bucket,
+                                &src,
+                                &dst,
+                                None,
+                            ),
+                        };
                         let mut s = status.lock().unwrap();
                         *s = match res {
                             Ok(_) => "Restore complete".to_string(),
@@ -214,6 +318,9 @@ impl eframe::App for App {
                         restore_dest: self.restore_dest.clone(),
                         compression: self.compression,
                         mode: self.mode,
+                        restore_method: self.restore_method.clone(),
+                        bucket: self.bucket.clone(),
+                        server_url: self.server_url.clone(),
                     });
                 }
                 let msg = self.status.lock().unwrap().clone();
@@ -310,8 +417,11 @@ fn main() -> Result<(), eframe::Error> {
                 output: cfg.output,
                 compression: cfg.compression,
                 mode: cfg.mode,
+                restore_method: cfg.restore_method,
                 restore_path: cfg.restore_path,
                 restore_dest: cfg.restore_dest,
+                bucket: cfg.bucket,
+                server_url: cfg.server_url,
                 history: load_history(),
                 status: Arc::new(Mutex::new(String::new())),
                 progress: Arc::new(Mutex::new(0.0)),
