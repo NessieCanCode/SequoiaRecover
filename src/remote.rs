@@ -145,7 +145,7 @@ async fn show_remote_history(
         .await?;
     let bucket_id = buckets
         .buckets
-        .get(0)
+        .first()
         .ok_or("Bucket not found")?
         .bucket_id
         .clone();
