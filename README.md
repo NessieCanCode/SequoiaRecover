@@ -1,6 +1,6 @@
 # SequoiaRecover
 
-**SequoiaRecover** is a free, cross-platform backup tool designed for Windows, macOS, and Linux that securely backs up your data to cloud storage services like Backblaze. Built with performance and safety in mind using **Rust**, SequoiaRecover aims to provide reliable disaster recovery and business continuity solutions for individuals and organizations alike.
+**SequoiaRecover** is a free, cross-platform backup tool designed for Windows, macOS, and Linux that securely backs up your data to cloud storage services like Backblaze, AWS S3 and Azure Blob Storage. Built with performance and safety in mind using **Rust**, SequoiaRecover aims to provide reliable disaster recovery and business continuity solutions for individuals and organizations alike.
 
 ---
 
@@ -8,7 +8,7 @@
 
 - Cross-platform support: Windows, macOS, and Linux
 - Incremental and full backups
-- Integration with cloud storage providers (initially Backblaze B2)
+- Integration with cloud storage providers (Backblaze B2, AWS S3 and Azure Blob Storage)
 - Secure, efficient data transfer and storage
 - Recursive directory backups
 - Multi-threaded compression support
@@ -20,7 +20,7 @@
 - View past backup history
 - Inspect backup contents without extracting
 - Restore files from archives
-- Retrieve and restore backups directly from Backblaze
+- Retrieve and restore backups directly from your chosen cloud provider
 
 ---
 
@@ -29,7 +29,7 @@
 ### Prerequisites
 
 - Rust toolchain installed (via [rustup](https://rustup.rs/))
-- Access to a cloud storage account (e.g., Backblaze B2)
+- Access to a cloud storage account (Backblaze B2, AWS S3 or Azure Blob)
 
 ### Installation
 
@@ -66,7 +66,7 @@ To run automated backups every hour:
 sequoiarecover schedule --source /path/to/data --bucket my-bucket --interval 3600 --mode incremental
 ```
 Include `--keyring` when scheduling if credentials are stored in your keychain.
-Show previous backups stored in Backblaze:
+Show previous backups stored in Backblaze (use `--cloud aws` or `--cloud azure` for other providers):
 ```bash
 sequoiarecover history --bucket my-bucket
 ```
@@ -137,6 +137,10 @@ sequoiarecover init --keyring
 ```
 
 You'll be prompted for the account ID and application key. When using the `--keyring` flag no password is required. Subsequent `backup` and `schedule` commands can retrieve the credentials by passing `--keyring` or by decrypting the config file if `--keyring` was not used.
+
+### AWS and Azure Authentication
+
+AWS and Azure credentials are read from the environment. Set `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` and `AWS_REGION` when using `--cloud aws`. For Azure Blob Storage set `AZURE_STORAGE_ACCOUNT` and `AZURE_STORAGE_KEY` when using `--cloud azure`.
 
 For instructions on using the local server feature see [docs/server.md](docs/server.md).
 

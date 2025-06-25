@@ -46,6 +46,10 @@ tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
 keyring = "2"
 directories = "5"
 rfd = "0.15"
+aws-config = "1"
+aws-sdk-s3 = "1"
+azure_storage = "0.13"
+azure_storage_blobs = "0.13"
 
 
 [dev-dependencies]
