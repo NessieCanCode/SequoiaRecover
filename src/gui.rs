@@ -1,3 +1,4 @@
+use chrono::TimeZone;
 use directories::ProjectDirs;
 use eframe::egui::{self, ComboBox, TextEdit};
 use sequoiarecover::backup::{
@@ -134,6 +135,7 @@ impl eframe::App for App {
                         ui.selectable_value(&mut self.compression, CompressionType::Gzip, "Gzip");
                         ui.selectable_value(&mut self.compression, CompressionType::Bzip2, "Bzip2");
                         ui.selectable_value(&mut self.compression, CompressionType::Zstd, "Zstd");
+                        ui.selectable_value(&mut self.compression, CompressionType::Auto, "Auto");
                     });
                 ComboBox::from_label("Mode")
                     .selected_text(format!("{:?}", self.mode))
@@ -181,6 +183,7 @@ impl eframe::App for App {
                 ui.label(msg);
                 let value = *self.progress.lock().unwrap();
                 ui.add(egui::ProgressBar::new(value).show_percentage());
+                ui.label(format!("{:.0}%", value * 100.0));
             }
             Tab::Restore => {
                 ui.heading("Restore Backup");
@@ -223,12 +226,7 @@ impl eframe::App for App {
                 } else {
                     egui::ScrollArea::vertical().show(ui, |ui| {
                         for entry in &self.history {
-                            let dt = chrono::DateTime::<chrono::Utc>::from_timestamp(
-                                entry.timestamp as i64,
-                                0,
-                            )
-                            .unwrap()
-                            .with_timezone(&chrono::Local);
+                            let dt = chrono::Local.timestamp_opt(entry.timestamp, 0).unwrap();
                             ui.horizontal(|ui| {
                                 ui.label(dt.format("%Y-%m-%d %H:%M:%S").to_string());
                                 ui.label(format!("{:?}", entry.mode));
