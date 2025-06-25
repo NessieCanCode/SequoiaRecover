@@ -8,7 +8,9 @@ use sequoiarecover::backup::{
 use sequoiarecover::config::{
     config_file_path, encrypt_config, history_file_path, Config, HistoryEntry,
 };
-use sequoiarecover::remote::restore_remote_backup_blocking;
+use sequoiarecover::remote::{
+    restore_remote_backup_blocking, restore_s3_backup_blocking, restore_azure_backup_blocking,
+};
 use sequoiarecover::server_client::restore_server_backup_blocking;
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
@@ -40,6 +42,8 @@ enum RestoreMethod {
     #[default]
     Local,
     Backblaze,
+    Aws,
+    Azure,
     Server,
 }
 
@@ -235,6 +239,16 @@ impl eframe::App for App {
                         );
                         ui.selectable_value(
                             &mut self.restore_method,
+                            RestoreMethod::Aws,
+                            "AWS",
+                        );
+                        ui.selectable_value(
+                            &mut self.restore_method,
+                            RestoreMethod::Azure,
+                            "Azure",
+                        );
+                        ui.selectable_value(
+                            &mut self.restore_method,
                             RestoreMethod::Server,
                             "Server",
                         );
@@ -251,7 +265,7 @@ impl eframe::App for App {
                             }
                         });
                     }
-                    RestoreMethod::Backblaze | RestoreMethod::Server => {
+                    RestoreMethod::Backblaze | RestoreMethod::Aws | RestoreMethod::Azure | RestoreMethod::Server => {
                         ui.horizontal(|ui| {
                             ui.label("Bucket:");
                             ui.text_edit_singleline(&mut self.bucket);
@@ -297,6 +311,27 @@ impl eframe::App for App {
                                 &dst,
                                 None,
                             ),
+                            RestoreMethod::Aws => {
+                                if let (Ok(ak), Ok(sk), Ok(region)) = (
+                                    std::env::var("AWS_ACCESS_KEY_ID"),
+                                    std::env::var("AWS_SECRET_ACCESS_KEY"),
+                                    std::env::var("AWS_REGION"),
+                                ) {
+                                    restore_s3_backup_blocking(&ak, &sk, &region, &bucket, &src, &dst, None)
+                                } else {
+                                    Err("Missing AWS credentials".into())
+                                }
+                            }
+                            RestoreMethod::Azure => {
+                                if let (Ok(acct), Ok(key)) = (
+                                    std::env::var("AZURE_STORAGE_ACCOUNT"),
+                                    std::env::var("AZURE_STORAGE_KEY"),
+                                ) {
+                                    restore_azure_backup_blocking(&acct, &key, &bucket, &src, &dst, None)
+                                } else {
+                                    Err("Missing Azure credentials".into())
+                                }
+                            }
                             RestoreMethod::Server => restore_server_backup_blocking(
                                 &server_url,
                                 &bucket,

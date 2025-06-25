@@ -7,7 +7,10 @@ use sequoiarecover::config::{
 };
 use sequoiarecover::remote::{
     list_remote_backup_blocking, restore_remote_backup_blocking, show_remote_history_blocking,
-    upload_to_backblaze_blocking,
+    upload_to_backblaze_blocking, upload_to_s3_blocking,
+    show_s3_history_blocking, list_s3_backup_blocking, restore_s3_backup_blocking,
+    upload_to_azure_blocking, show_azure_history_blocking,
+    list_azure_backup_blocking, restore_azure_backup_blocking,
 };
 use sequoiarecover::server::run_server;
 use sequoiarecover::server_client::{
@@ -245,6 +248,33 @@ fn main() {
                         }
                         Err(e) => eprintln!("{}", e),
                     }
+                } else if cloud == "aws" {
+                    if let (Ok(ak), Ok(sk), Ok(region)) = (
+                        std::env::var("AWS_ACCESS_KEY_ID"),
+                        std::env::var("AWS_SECRET_ACCESS_KEY"),
+                        std::env::var("AWS_REGION"),
+                    ) {
+                        if let Err(e) = upload_to_s3_blocking(&ak, &sk, &region, &bucket, &output) {
+                            eprintln!("Upload failed: {}", e);
+                        } else {
+                            println!("Uploaded to S3 bucket {}", bucket);
+                        }
+                    } else {
+                        eprintln!("Missing AWS credentials");
+                    }
+                } else if cloud == "azure" {
+                    if let (Ok(acct), Ok(key)) = (
+                        std::env::var("AZURE_STORAGE_ACCOUNT"),
+                        std::env::var("AZURE_STORAGE_KEY"),
+                    ) {
+                        if let Err(e) = upload_to_azure_blocking(&acct, &key, &bucket, &output) {
+                            eprintln!("Upload failed: {}", e);
+                        } else {
+                            println!("Uploaded to Azure container {}", bucket);
+                        }
+                    } else {
+                        eprintln!("Missing Azure credentials");
+                    }
                 } else if cloud == "server" {
                     let url = server_url.or_else(|| std::env::var("SERVER_URL").ok());
                     if let Some(u) = url {
@@ -308,6 +338,33 @@ fn main() {
                             }
                             Err(e) => eprintln!("{}", e),
                         }
+                    } else if cloud == "aws" {
+                        if let (Ok(ak), Ok(sk), Ok(region)) = (
+                            std::env::var("AWS_ACCESS_KEY_ID"),
+                            std::env::var("AWS_SECRET_ACCESS_KEY"),
+                            std::env::var("AWS_REGION"),
+                        ) {
+                            if let Err(e) = upload_to_s3_blocking(&ak, &sk, &region, &bucket, &output) {
+                                eprintln!("Upload failed: {}", e);
+                            } else {
+                                println!("Uploaded to S3 bucket {}", bucket);
+                            }
+                        } else {
+                            eprintln!("Missing AWS credentials");
+                        }
+                    } else if cloud == "azure" {
+                        if let (Ok(acct), Ok(key)) = (
+                            std::env::var("AZURE_STORAGE_ACCOUNT"),
+                            std::env::var("AZURE_STORAGE_KEY"),
+                        ) {
+                            if let Err(e) = upload_to_azure_blocking(&acct, &key, &bucket, &output) {
+                                eprintln!("Upload failed: {}", e);
+                            } else {
+                                println!("Uploaded to Azure container {}", bucket);
+                            }
+                        } else {
+                            eprintln!("Missing Azure credentials");
+                        }
                     } else if cloud == "server" {
                         let url = server_url
                             .clone()
@@ -350,6 +407,29 @@ fn main() {
                         }
                         Err(e) => eprintln!("{}", e),
                     }
+                } else if cloud == "aws" {
+                    if let (Ok(ak), Ok(sk), Ok(region)) = (
+                        std::env::var("AWS_ACCESS_KEY_ID"),
+                        std::env::var("AWS_SECRET_ACCESS_KEY"),
+                        std::env::var("AWS_REGION"),
+                    ) {
+                        if let Err(e) = show_s3_history_blocking(&ak, &sk, &region, &b, retention) {
+                            eprintln!("{}", e);
+                        }
+                    } else {
+                        eprintln!("Missing AWS credentials");
+                    }
+                } else if cloud == "azure" {
+                    if let (Ok(acct), Ok(key)) = (
+                        std::env::var("AZURE_STORAGE_ACCOUNT"),
+                        std::env::var("AZURE_STORAGE_KEY"),
+                    ) {
+                        if let Err(e) = show_azure_history_blocking(&acct, &key, &b, retention) {
+                            eprintln!("{}", e);
+                        }
+                    } else {
+                        eprintln!("Missing Azure credentials");
+                    }
                 } else if cloud == "server" {
                     let url = server_url.or_else(|| std::env::var("SERVER_URL").ok());
                     if let Some(u) = url {
@@ -381,6 +461,25 @@ fn main() {
                             list_remote_backup_blocking(&id, &key, &b, &backup, compression)
                         }
                         Err(e) => Err(e),
+                    }
+                } else if cloud == "aws" {
+                    if let (Ok(ak), Ok(sk), Ok(region)) = (
+                        std::env::var("AWS_ACCESS_KEY_ID"),
+                        std::env::var("AWS_SECRET_ACCESS_KEY"),
+                        std::env::var("AWS_REGION"),
+                    ) {
+                        list_s3_backup_blocking(&ak, &sk, &region, &b, &backup, compression)
+                    } else {
+                        Err("Missing AWS credentials".into())
+                    }
+                } else if cloud == "azure" {
+                    if let (Ok(acct), Ok(key)) = (
+                        std::env::var("AZURE_STORAGE_ACCOUNT"),
+                        std::env::var("AZURE_STORAGE_KEY"),
+                    ) {
+                        list_azure_backup_blocking(&acct, &key, &b, &backup, compression)
+                    } else {
+                        Err("Missing Azure credentials".into())
                     }
                 } else if cloud == "server" {
                     let url = server_url.or_else(|| std::env::var("SERVER_URL").ok());
@@ -422,6 +521,25 @@ fn main() {
                             compression,
                         ),
                         Err(e) => Err(e),
+                    }
+                } else if cloud == "aws" {
+                    if let (Ok(ak), Ok(sk), Ok(region)) = (
+                        std::env::var("AWS_ACCESS_KEY_ID"),
+                        std::env::var("AWS_SECRET_ACCESS_KEY"),
+                        std::env::var("AWS_REGION"),
+                    ) {
+                        restore_s3_backup_blocking(&ak, &sk, &region, &b, &backup, &destination, compression)
+                    } else {
+                        Err("Missing AWS credentials".into())
+                    }
+                } else if cloud == "azure" {
+                    if let (Ok(acct), Ok(key)) = (
+                        std::env::var("AZURE_STORAGE_ACCOUNT"),
+                        std::env::var("AZURE_STORAGE_KEY"),
+                    ) {
+                        restore_azure_backup_blocking(&acct, &key, &b, &backup, &destination, compression)
+                    } else {
+                        Err("Missing Azure credentials".into())
                     }
                 } else if cloud == "server" {
                     let url = server_url.or_else(|| std::env::var("SERVER_URL").ok());
