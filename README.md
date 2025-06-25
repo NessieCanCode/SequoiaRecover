@@ -117,10 +117,10 @@ A minimal graphical interface is available as a separate binary:
 cargo run --bin sequoiarecover-gui
 ```
 
-The GUI currently supports running a full backup with gzip compression.
-While a backup runs a progress bar is displayed. The last used source and output
-paths are saved in a small configuration file under the system's config
-directory.
+The GUI provides a multi-tab interface for running backups, restoring archives,
+browsing history and initializing credentials. Compression and backup mode
+selections are persisted between sessions alongside the most recent paths.
+While a backup runs a progress bar is displayed.
 
 ### Backblaze Authentication
 
