@@ -33,10 +33,144 @@ pub enum CompressionType {
     Auto,
 }
 
-#[derive(Clone, Copy, ValueEnum, Debug, Serialize, Deserialize)]
+#[derive(Clone, Copy, ValueEnum, Debug, Serialize, Deserialize, PartialEq)]
 pub enum BackupMode {
     Full,
     Incremental,
+}
+
+fn count_files(
+    root: &Path,
+    mode: BackupMode,
+    previous: &HashMap<String, u64>,
+) -> Result<u64, Box<dyn Error>> {
+    let mut count = 0u64;
+    for entry in WalkDir::new(root) {
+        let entry = entry?;
+        if entry.depth() == 0 && entry.file_type().is_dir() {
+            continue;
+        }
+        if entry.file_type().is_file() {
+            let rel = entry.path().strip_prefix(root)?;
+            let rel_str = rel.to_string_lossy().to_string();
+            let mtime = entry
+                .metadata()?
+                .modified()?
+                .duration_since(UNIX_EPOCH)?
+                .as_secs();
+            let include = match mode {
+                BackupMode::Full => true,
+                BackupMode::Incremental => previous.get(&rel_str).map_or(true, |old| *old < mtime),
+            };
+            if include {
+                count += 1;
+            }
+        }
+    }
+    Ok(count)
+}
+
+pub fn run_backup_with_progress<F>(
+    source: &str,
+    output: &str,
+    compression: CompressionType,
+    mode: BackupMode,
+    mut progress: F,
+) -> Result<(), Box<dyn Error>>
+where
+    F: FnMut(u64, u64),
+{
+    let path = Path::new(source);
+    let meta_path = format!("{}.meta", output);
+    let previous: HashMap<String, u64> = if let Ok(f) = File::open(&meta_path) {
+        serde_json::from_reader(f)?
+    } else {
+        HashMap::new()
+    };
+    let mut current: HashMap<String, u64> = HashMap::new();
+
+    let file = File::create(output)?;
+
+    let actual = if compression == CompressionType::Auto {
+        auto_select_compression(None)
+    } else {
+        compression
+    };
+
+    let total = count_files(path, mode, &previous)?;
+    let mut done = 0u64;
+
+    match actual {
+        CompressionType::Gzip => {
+            let enc = GzEncoder::new(file, GzCompression::default());
+            let mut tar = Builder::new(enc);
+            add_files_progress(
+                &mut tar,
+                path,
+                mode,
+                &previous,
+                &mut current,
+                &mut done,
+                total,
+                &mut progress,
+            )?;
+            let enc = tar.into_inner()?;
+            enc.finish()?;
+        }
+        CompressionType::Bzip2 => {
+            let enc = BzEncoder::new(file, BzCompression::default());
+            let mut tar = Builder::new(enc);
+            add_files_progress(
+                &mut tar,
+                path,
+                mode,
+                &previous,
+                &mut current,
+                &mut done,
+                total,
+                &mut progress,
+            )?;
+            let enc = tar.into_inner()?;
+            enc.finish()?;
+        }
+        CompressionType::Zstd => {
+            let mut enc = ZstdEncoder::new(file, 0)?;
+            enc.multithread(num_cpus::get() as u32)?;
+            let mut tar = Builder::new(enc);
+            add_files_progress(
+                &mut tar,
+                path,
+                mode,
+                &previous,
+                &mut current,
+                &mut done,
+                total,
+                &mut progress,
+            )?;
+            let enc = tar.into_inner()?;
+            enc.finish()?;
+        }
+        CompressionType::None => {
+            let mut tar = Builder::new(file);
+            add_files_progress(
+                &mut tar,
+                path,
+                mode,
+                &previous,
+                &mut current,
+                &mut done,
+                total,
+                &mut progress,
+            )?;
+            tar.finish()?;
+        }
+        CompressionType::Auto => unreachable!(),
+    }
+
+    let meta_file = File::create(&meta_path)?;
+    serde_json::to_writer_pretty(meta_file, &current)?;
+    record_backup(output, mode, actual)?;
+    Ok(())
 }
 
 pub fn run_backup(
@@ -66,14 +200,34 @@ pub fn run_backup(
         CompressionType::Gzip => {
             let enc = GzEncoder::new(file, GzCompression::default());
             let mut tar = Builder::new(enc);
-            add_files(&mut tar, path, mode, &previous, &mut current)?;
+            let mut dummy = 0u64;
+            add_files_progress(
+                &mut tar,
+                path,
+                mode,
+                &previous,
+                &mut current,
+                &mut dummy,
+                0,
+                &mut |_d, _t| {},
+            )?;
             let enc = tar.into_inner()?;
             enc.finish()?;
         }
         CompressionType::Bzip2 => {
             let enc = BzEncoder::new(file, BzCompression::default());
             let mut tar = Builder::new(enc);
-            add_files(&mut tar, path, mode, &previous, &mut current)?;
+            let mut dummy = 0u64;
+            add_files_progress(
+                &mut tar,
+                path,
+                mode,
+                &previous,
+                &mut current,
+                &mut dummy,
+                0,
+                &mut |_d, _t| {},
+            )?;
             let enc = tar.into_inner()?;
             enc.finish()?;
         }
@@ -81,13 +235,33 @@ pub fn run_backup(
             let mut enc = ZstdEncoder::new(file, 0)?;
             enc.multithread(num_cpus::get() as u32)?;
             let mut tar = Builder::new(enc);
-            add_files(&mut tar, path, mode, &previous, &mut current)?;
+            let mut dummy = 0u64;
+            add_files_progress(
+                &mut tar,
+                path,
+                mode,
+                &previous,
+                &mut current,
+                &mut dummy,
+                0,
+                &mut |_d, _t| {},
+            )?;
             let enc = tar.into_inner()?;
             enc.finish()?;
         }
         CompressionType::None => {
             let mut tar = Builder::new(file);
-            add_files(&mut tar, path, mode, &previous, &mut current)?;
+            let mut dummy = 0u64;
+            add_files_progress(
+                &mut tar,
+                path,
+                mode,
+                &previous,
+                &mut current,
+                &mut dummy,
+                0,
+                &mut |_d, _t| {},
+            )?;
             tar.finish()?;
         }
         CompressionType::Auto => unreachable!(),
@@ -99,12 +273,15 @@ pub fn run_backup(
     Ok(())
 }
 
-fn add_files<T: std::io::Write>(
+fn add_files_progress<T: std::io::Write>(
     tar: &mut Builder<T>,
     root: &Path,
     mode: BackupMode,
     previous: &HashMap<String, u64>,
     current: &mut HashMap<String, u64>,
+    done: &mut u64,
+    total: u64,
+    progress: &mut dyn FnMut(u64, u64),
 ) -> Result<(), Box<dyn Error>> {
     for entry in WalkDir::new(root) {
         let entry = entry?;
@@ -127,6 +304,8 @@ fn add_files<T: std::io::Write>(
             };
             if include {
                 tar.append_path_with_name(path, rel)?;
+                *done += 1;
+                progress(*done, total);
             }
         }
     }

@@ -128,6 +128,12 @@ enum Commands {
         /// URL of the backup server when using the server cloud option
         #[arg(long)]
         server_url: Option<String>,
+        /// Delete backups older than this many days
+        #[arg(long)]
+        retain_days: Option<u64>,
+        /// Delete backups older than this many weeks
+        #[arg(long)]
+        retain_weeks: Option<u64>,
     },
     /// List files inside a backup without extracting
     List {
@@ -328,12 +334,17 @@ fn main() {
             application_key,
             keyring,
             server_url,
+            retain_days,
+            retain_weeks,
         } => {
+            let retention = retain_days
+                .map(|d| Duration::from_secs(d * 24 * 3600))
+                .or_else(|| retain_weeks.map(|w| Duration::from_secs(w * 7 * 24 * 3600)));
             if let Some(b) = bucket {
                 if cloud == "backblaze" {
                     match load_credentials(account_id, application_key, keyring) {
                         Ok((id, key)) => {
-                            if let Err(e) = show_remote_history_blocking(&id, &key, &b) {
+                            if let Err(e) = show_remote_history_blocking(&id, &key, &b, retention) {
                                 eprintln!("{}", e);
                             }
                         }
