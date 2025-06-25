@@ -55,6 +55,7 @@ Example command to perform a backup:
 sequoiarecover backup --source /path/to/data --cloud backblaze --bucket my-bucket --mode full
 ```
 The `--mode` flag controls whether a **full** or **incremental** backup is performed.
+Add `--keyring` to read Backblaze credentials from your keychain if you used `sequoiarecover init --keyring`.
 Incremental mode only archives files that have changed since the previous backup.
 You can control compression with `--compression`. Passing `auto` lets
 SequoiaRecover choose a compression method based on your network speed (measured
@@ -64,6 +65,7 @@ To run automated backups every hour:
 ```bash
 sequoiarecover schedule --source /path/to/data --bucket my-bucket --interval 3600 --mode incremental
 ```
+Include `--keyring` when scheduling if credentials are stored in your keychain.
 Show previous backups stored in Backblaze:
 ```bash
 sequoiarecover history --bucket my-bucket
@@ -124,13 +126,17 @@ directory.
 
 ### Backblaze Authentication
 
-Run the following command once to create an encrypted configuration file for your Backblaze credentials:
+Run one of the following commands once to store your Backblaze credentials:
 
 ```bash
+# Save credentials in an encrypted file (default)
 sequoiarecover init
+
+# Save credentials in your OS keychain
+sequoiarecover init --keyring
 ```
 
-You'll be prompted for your account ID, application key, and an encryption password. After that, the `backup` and `schedule` commands will automatically decrypt the credentials when uploading to Backblaze.
+You'll be prompted for the account ID and application key. When using the `--keyring` flag no password is required. Subsequent `backup` and `schedule` commands can retrieve the credentials by passing `--keyring` or by decrypting the config file if `--keyring` was not used.
 
 For instructions on using the local server feature see [docs/server.md](docs/server.md).
 
