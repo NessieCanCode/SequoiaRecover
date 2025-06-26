@@ -5400,6 +5400,7 @@ dependencies = [
  "eframe",
  "filetime",
  "flate2",
+ "futures",
  "keyring",
  "num_cpus",
  "pbkdf2",
