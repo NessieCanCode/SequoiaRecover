@@ -15,8 +15,12 @@ use tokio::fs::File as TokioFile;
 use tokio::runtime::Runtime;
 use tracing::{error, info};
 use aws_config::meta::region::RegionProviderChain;
-use aws_sdk_s3::{config::Region, types::ByteStream, Client as S3Client, Credentials as AwsCredentials};
-use azure_storage::core::prelude::*;
+use aws_sdk_s3::{
+    config::{Credentials as AwsCredentials, Region},
+    primitives::ByteStream,
+    Client as S3Client,
+};
+use azure_storage::prelude::*;
 use azure_storage_blobs::prelude::*;
 use futures::StreamExt;
 
@@ -501,9 +505,9 @@ pub fn restore_s3_backup_blocking(
 }
 
 async fn azure_container(account: &str, key: &str, container: &str) -> Result<ContainerClient, Box<dyn Error>> {
-    let http_client = new_http_client();
-    let storage = StorageAccountClient::new_access_key(http_client, account, key);
-    Ok(storage.as_container_client(container.to_string()))
+    let credentials = StorageCredentials::Key(account.to_owned(), key.to_owned());
+    let service_client = BlobServiceClient::new(account.to_owned(), credentials);
+    Ok(service_client.container_client(container))
 }
 
 async fn upload_to_azure(
@@ -520,7 +524,7 @@ async fn upload_to_azure(
         .to_string_lossy()
         .to_string();
     client
-        .as_blob_client(name)
+        .blob_client(name)
         .put_block_blob(data)
         .into_future()
         .await?;
@@ -554,8 +558,8 @@ async fn download_from_azure(
     dest: &Path,
 ) -> Result<(), Box<dyn Error>> {
     let client = azure_container(account, key, container).await?;
-    let resp = client.as_blob_client(file_name).get().into_future().await?;
-    tokio::fs::write(dest, resp.data).await?;
+    let data = client.blob_client(file_name).get_content().await?;
+    tokio::fs::write(dest, data).await?;
     Ok(())
 }
 
@@ -589,12 +593,12 @@ async fn show_azure_history(
     let mut stream = client.list_blobs().into_stream();
     while let Some(res) = stream.next().await {
         let resp = res?;
-        for blob in resp.blobs.blobs {
+        for blob in resp.blobs.blobs() {
             let ts = format!("{:?}", blob.properties.last_modified);
             info!("{}\t{}", ts, blob.name);
             if let Some(r) = retention {
                 if r == Duration::ZERO {
-                    let _ = client.as_blob_client(blob.name.clone()).delete().into_future().await?;
+                    let _ = client.blob_client(blob.name.clone()).delete().into_future().await?;
                 }
             }
         }

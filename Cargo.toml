@@ -50,6 +50,7 @@ aws-config = "1"
 aws-sdk-s3 = "1"
 azure_storage = "0.13"
 azure_storage_blobs = "0.13"
+futures = "0.3"
 
 
 [dev-dependencies]
