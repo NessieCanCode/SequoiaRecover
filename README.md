@@ -122,7 +122,9 @@ cargo run --bin sequoiarecover-gui
 The GUI provides a multi-tab interface for running backups, restoring archives,
 browsing history and initializing credentials. Compression and backup mode
 selections are persisted between sessions alongside the most recent paths.
-While a backup runs a progress bar is displayed.
+While a backup runs a progress bar is displayed. The Backup tab now lets you
+upload directly to Backblaze, AWS, Azure or a custom server by choosing the
+desired destination.
 
 ### Backblaze Authentication
 
