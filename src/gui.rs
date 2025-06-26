@@ -9,9 +9,9 @@ use sequoiarecover::config::{
     config_file_path, encrypt_config, history_file_path, Config, HistoryEntry,
 };
 use sequoiarecover::remote::{
-    restore_remote_backup_blocking, restore_s3_backup_blocking, restore_azure_backup_blocking,
+    restore_azure_backup_blocking, restore_remote_backup_blocking, restore_s3_backup_blocking,
 };
-use sequoiarecover::server_client::restore_server_backup_blocking;
+use sequoiarecover::server_client::{restore_server_backup_blocking, upload_to_server_blocking};
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
 
@@ -30,6 +30,8 @@ struct GuiConfig {
     #[serde(default)]
     mode: BackupMode,
     #[serde(default)]
+    destination: BackupDestination,
+    #[serde(default)]
     restore_method: RestoreMethod,
     #[serde(default)]
     bucket: String,
@@ -39,6 +41,16 @@ struct GuiConfig {
 
 #[derive(Serialize, Deserialize, PartialEq, Clone, Debug, Default)]
 enum RestoreMethod {
+    #[default]
+    Local,
+    Backblaze,
+    Aws,
+    Azure,
+    Server,
+}
+
+#[derive(Serialize, Deserialize, PartialEq, Clone, Debug, Default)]
+enum BackupDestination {
     #[default]
     Local,
     Backblaze,
@@ -60,6 +72,7 @@ struct App {
     output: String,
     compression: CompressionType,
     mode: BackupMode,
+    destination: BackupDestination,
     restore_method: RestoreMethod,
     restore_path: String,
     restore_dest: String,
@@ -177,11 +190,49 @@ impl eframe::App for App {
                         ui.selectable_value(&mut self.mode, BackupMode::Full, "Full");
                         ui.selectable_value(&mut self.mode, BackupMode::Incremental, "Incremental");
                     });
+                ComboBox::from_label("Destination")
+                    .selected_text(format!("{:?}", self.destination))
+                    .show_ui(ui, |ui| {
+                        ui.selectable_value(
+                            &mut self.destination,
+                            BackupDestination::Local,
+                            "Local",
+                        );
+                        ui.selectable_value(
+                            &mut self.destination,
+                            BackupDestination::Backblaze,
+                            "Backblaze",
+                        );
+                        ui.selectable_value(&mut self.destination, BackupDestination::Aws, "AWS");
+                        ui.selectable_value(
+                            &mut self.destination,
+                            BackupDestination::Azure,
+                            "Azure",
+                        );
+                        ui.selectable_value(
+                            &mut self.destination,
+                            BackupDestination::Server,
+                            "Server",
+                        );
+                    });
+                if self.destination == BackupDestination::Server {
+                    ui.horizontal(|ui| {
+                        ui.label("Bucket:");
+                        ui.text_edit_singleline(&mut self.bucket);
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label("Server URL:");
+                        ui.text_edit_singleline(&mut self.server_url);
+                    });
+                }
                 if ui.button("Run Backup").clicked() {
                     let source = self.source.clone();
                     let output = self.output.clone();
                     let compression = self.compression;
                     let mode = self.mode;
+                    let destination = self.destination.clone();
+                    let bucket = self.bucket.clone();
+                    let server_url = self.server_url.clone();
                     let status = self.status.clone();
                     let progress = self.progress.clone();
                     std::thread::spawn(move || {
@@ -197,6 +248,14 @@ impl eframe::App for App {
                                 }
                             },
                         );
+                        if res.is_ok() && matches!(destination, BackupDestination::Server) {
+                            if let Err(e) = upload_to_server_blocking(&server_url, &bucket, &output)
+                            {
+                                let mut s = status.lock().unwrap();
+                                *s = format!("Upload failed: {}", e);
+                                return;
+                            }
+                        }
                         let mut s = status.lock().unwrap();
                         *s = match res {
                             Ok(_) => "Backup complete".to_string(),
@@ -210,6 +269,7 @@ impl eframe::App for App {
                         restore_dest: self.restore_dest.clone(),
                         compression: self.compression,
                         mode: self.mode,
+                        destination: self.destination.clone(),
                         restore_method: self.restore_method.clone(),
                         bucket: self.bucket.clone(),
                         server_url: self.server_url.clone(),
@@ -237,11 +297,7 @@ impl eframe::App for App {
                             RestoreMethod::Backblaze,
                             "Backblaze",
                         );
-                        ui.selectable_value(
-                            &mut self.restore_method,
-                            RestoreMethod::Aws,
-                            "AWS",
-                        );
+                        ui.selectable_value(&mut self.restore_method, RestoreMethod::Aws, "AWS");
                         ui.selectable_value(
                             &mut self.restore_method,
                             RestoreMethod::Azure,
@@ -265,7 +321,10 @@ impl eframe::App for App {
                             }
                         });
                     }
-                    RestoreMethod::Backblaze | RestoreMethod::Aws | RestoreMethod::Azure | RestoreMethod::Server => {
+                    RestoreMethod::Backblaze
+                    | RestoreMethod::Aws
+                    | RestoreMethod::Azure
+                    | RestoreMethod::Server => {
                         ui.horizontal(|ui| {
                             ui.label("Bucket:");
                             ui.text_edit_singleline(&mut self.bucket);
@@ -317,7 +376,9 @@ impl eframe::App for App {
                                     std::env::var("AWS_SECRET_ACCESS_KEY"),
                                     std::env::var("AWS_REGION"),
                                 ) {
-                                    restore_s3_backup_blocking(&ak, &sk, &region, &bucket, &src, &dst, None)
+                                    restore_s3_backup_blocking(
+                                        &ak, &sk, &region, &bucket, &src, &dst, None,
+                                    )
                                 } else {
                                     Err("Missing AWS credentials".into())
                                 }
@@ -327,7 +388,9 @@ impl eframe::App for App {
                                     std::env::var("AZURE_STORAGE_ACCOUNT"),
                                     std::env::var("AZURE_STORAGE_KEY"),
                                 ) {
-                                    restore_azure_backup_blocking(&acct, &key, &bucket, &src, &dst, None)
+                                    restore_azure_backup_blocking(
+                                        &acct, &key, &bucket, &src, &dst, None,
+                                    )
                                 } else {
                                     Err("Missing Azure credentials".into())
                                 }
@@ -353,6 +416,7 @@ impl eframe::App for App {
                         restore_dest: self.restore_dest.clone(),
                         compression: self.compression,
                         mode: self.mode,
+                        destination: self.destination.clone(),
                         restore_method: self.restore_method.clone(),
                         bucket: self.bucket.clone(),
                         server_url: self.server_url.clone(),
@@ -452,6 +516,7 @@ fn main() -> Result<(), eframe::Error> {
                 output: cfg.output,
                 compression: cfg.compression,
                 mode: cfg.mode,
+                destination: cfg.destination,
                 restore_method: cfg.restore_method,
                 restore_path: cfg.restore_path,
                 restore_dest: cfg.restore_dest,

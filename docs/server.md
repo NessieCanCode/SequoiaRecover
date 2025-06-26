@@ -26,6 +26,10 @@ sequoiarecover backup --source /data \
 
 The `schedule`, `list`, and `restore` commands also support `--cloud server` with `--server_url`.
 
+The graphical interface exposes the same functionality. Select **Server** as the
+destination in the Backup tab and enter the bucket and server URL to upload
+archives from the GUI.
+
 ## Listing stored backups
 
 ```bash
