@@ -93,7 +93,13 @@ where
     F: FnMut(u64, u64),
 {
     let path = Path::new(source);
-    let meta_path = format!("{}.meta", output);
+    let actual = if compression == CompressionType::Auto {
+        auto_select_compression(None)
+    } else {
+        compression
+    };
+    let output_path = ensure_extension(output, actual);
+    let meta_path = format!("{}.meta", output_path);
     let previous: HashMap<String, u64> = if let Ok(f) = File::open(&meta_path) {
         serde_json::from_reader(f)?
     } else {
@@ -101,13 +107,7 @@ where
     };
     let mut current: HashMap<String, u64> = HashMap::new();
 
-    let file = File::create(output)?;
-
-    let actual = if compression == CompressionType::Auto {
-        auto_select_compression(None)
-    } else {
-        compression
-    };
+    let file = File::create(&output_path)?;
 
     let total = count_files(path, mode, &previous)?;
     let mut done = 0u64;
@@ -181,7 +181,7 @@ where
 
     let meta_file = File::create(&meta_path)?;
     serde_json::to_writer_pretty(meta_file, &current)?;
-    record_backup(output, mode, actual)?;
+    record_backup(&output_path, mode, actual)?;
     Ok(())
 }
 
@@ -192,7 +192,13 @@ pub fn run_backup(
     mode: BackupMode,
 ) -> Result<(), Box<dyn Error>> {
     let path = Path::new(source);
-    let meta_path = format!("{}.meta", output);
+    let actual = if compression == CompressionType::Auto {
+        auto_select_compression(None)
+    } else {
+        compression
+    };
+    let output_path = ensure_extension(output, actual);
+    let meta_path = format!("{}.meta", output_path);
     let previous: HashMap<String, u64> = if let Ok(f) = File::open(&meta_path) {
         serde_json::from_reader(f)?
     } else {
@@ -200,13 +206,7 @@ pub fn run_backup(
     };
     let mut current: HashMap<String, u64> = HashMap::new();
 
-    let file = File::create(output)?;
-
-    let actual = if compression == CompressionType::Auto {
-        auto_select_compression(None)
-    } else {
-        compression
-    };
+    let file = File::create(&output_path)?;
 
     match actual {
         CompressionType::Gzip => {
@@ -281,7 +281,7 @@ pub fn run_backup(
 
     let meta_file = File::create(&meta_path)?;
     serde_json::to_writer_pretty(meta_file, &current)?;
-    record_backup(output, mode, actual)?;
+    record_backup(&output_path, mode, actual)?;
     Ok(())
 }
 
@@ -364,6 +364,42 @@ pub fn auto_select_compression(override_speed: Option<u64>) -> CompressionType {
         s if s >= 100 => CompressionType::Gzip,
         _ => CompressionType::Zstd,
     }
+}
+
+pub fn ensure_extension(path: &str, compression: CompressionType) -> String {
+    let lc = path.to_lowercase();
+    let base = [
+        (".tar.gz", CompressionType::Gzip),
+        (".tgz", CompressionType::Gzip),
+        (".tar.bz2", CompressionType::Bzip2),
+        (".tbz2", CompressionType::Bzip2),
+        (".tar.zst", CompressionType::Zstd),
+        (".tzst", CompressionType::Zstd),
+        (".tar", CompressionType::None),
+    ]
+    .iter()
+    .find_map(|(ext, ty)| {
+        if lc.ends_with(ext) {
+            Some((path[..path.len() - ext.len()].to_string(), *ty))
+        } else {
+            None
+        }
+    });
+
+    let stem = match base {
+        Some((b, _)) => b,
+        None => path.to_string(),
+    };
+
+    let ext = match compression {
+        CompressionType::Gzip => ".tar.gz",
+        CompressionType::Bzip2 => ".tar.bz2",
+        CompressionType::Zstd => ".tar.zst",
+        CompressionType::None => ".tar",
+        CompressionType::Auto => return path.to_string(),
+    };
+
+    format!("{}{}", stem, ext)
 }
 
 fn guess_compression(path: &str) -> CompressionType {
