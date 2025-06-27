@@ -41,6 +41,8 @@ cd SequoiaRecover
 Build the project:
 ```bash
 cargo build --release
+# Add hardware key support
+# cargo build --release --features hardware-auth
 ```
 
 Run the backup tool:
@@ -145,6 +147,11 @@ A modern GUI lives under `ui/`. Build it with `cargo run -p ui` to open a cross-
 
 Use `sequoiarecover init` to store cloud credentials. Run `sequoiarecover keygen` once to create a zero‑knowledge archive key stored in `~/.sequoiarecover/archive_key`. This key is required for all backup and restore operations and is never uploaded. Rotate it at any time with `sequoiarecover keyrotate`.
 The CLI automatically loads this key when encrypting or decrypting archives.
+If compiled with the `hardware-auth` feature and a YubiKey or HSM is present,
+run `sequoiarecover keygen --hardware-key` to store the archive key on the
+device. Subsequent operations will retrieve the key from hardware.
+On Linux systems, ensure the `pcscd` service and `libpcsclite` development
+files are installed so the YubiKey can be accessed.
 
 ### Resumable Uploads & Deduplication
 

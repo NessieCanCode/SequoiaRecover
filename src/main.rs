@@ -14,6 +14,8 @@ use sequoiarecover::remote::{
     show_azure_history_blocking, show_remote_history_blocking, show_s3_history_blocking,
     upload_to_azure_blocking, upload_to_backblaze_blocking, upload_to_s3_blocking,
 };
+#[cfg(feature = "hardware-auth")]
+use sequoiarecover::hardware_key;
 use tracing_subscriber::EnvFilter;
 
 use clap::{CommandFactory, Parser, Subcommand};
@@ -195,9 +197,18 @@ enum Commands {
         /// Store credentials in the OS keychain
         #[arg(long, default_value_t = false)]
         keyring: bool,
+        #[cfg(feature = "hardware-auth")]
+        /// Use a connected YubiKey/HSM for the archive key
+        #[arg(long, default_value_t = false)]
+        hardware_key: bool,
     },
     /// Generate encryption key used for archive encryption
-    Keygen,
+    Keygen {
+        #[cfg(feature = "hardware-auth")]
+        /// Store key on a YubiKey/HSM
+        #[arg(long, default_value_t = false)]
+        hardware_key: bool,
+    },
     /// Rotate to a new encryption key
     Keyrotate,
     /// Generate the SequoiaRecover man page
@@ -712,7 +723,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
         },
-        Commands::Init { keyring } => match config_file_path() {
+        Commands::Init { keyring, #[cfg(feature = "hardware-auth")] hardware_key } => match config_file_path() {
             Ok(path) => {
                 let account_id =
                     rpassword::prompt_password("Backblaze Account ID: ").unwrap_or_default();
@@ -754,12 +765,29 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         Err(e) => eprintln!("Failed to encrypt config: {}", e),
                     }
                 }
+                #[cfg(feature = "hardware-auth")]
+                if hardware_key {
+                    match hardware_key::get_or_create() {
+                        Ok(_) => println!("Hardware encryption key ready"),
+                        Err(e) => eprintln!("Hardware key error: {}", e),
+                    }
+                }
             }
             Err(e) => eprintln!("{}", e),
         },
-        Commands::Keygen => match get_or_create_local_key() {
-            Ok(_) => println!("Encryption key generated"),
-            Err(e) => eprintln!("{}", e),
+        Commands::Keygen { #[cfg(feature = "hardware-auth")] hardware_key } => {
+            #[cfg(feature = "hardware-auth")]
+            if hardware_key {
+                match hardware_key::get_or_create() {
+                    Ok(_) => println!("Hardware encryption key generated"),
+                    Err(e) => eprintln!("{}", e),
+                }
+                return Ok(());
+            }
+            match get_or_create_local_key() {
+                Ok(_) => println!("Encryption key generated"),
+                Err(e) => eprintln!("{}", e),
+            }
         },
         Commands::Keyrotate => match local_key_file_path() {
             Ok(path) => {
