@@ -5,6 +5,7 @@ use crate::config::{decrypt_config, encrypt_config, Config};
 use crate::remote::show_remote_history_blocking;
 use crate::remote::{download_from_backblaze_blocking, upload_to_backblaze_blocking};
 use crate::server::{handle_rejection, make_routes};
+use crate::server_client::upload_to_server_blocking;
 use filetime::FileTime;
 use serial_test::serial;
 use sha2::{Digest, Sha256};
@@ -194,4 +195,63 @@ async fn test_server_rejects_malicious_paths() {
         .reply(&filter)
         .await;
     assert_eq!(resp.status(), 400);
+}
+
+#[tokio::test]
+async fn test_server_stream_upload() {
+    use tokio::io::AsyncReadExt;
+
+    let dir = tempdir().unwrap();
+    let filter = make_routes(dir.path().into()).recover(handle_rejection);
+
+    let data = vec![0u8; 5 * 1024 * 1024];
+    let resp = warp_request()
+        .method("POST")
+        .path("/upload/bucket/large.bin")
+        .body(data.clone())
+        .reply(&filter)
+        .await;
+    assert_eq!(resp.status(), 200);
+
+    let mut f = tokio::fs::File::open(dir.path().join("bucket/large.bin"))
+        .await
+        .unwrap();
+    let mut buf = Vec::new();
+    f.read_to_end(&mut buf).await.unwrap();
+    assert_eq!(buf.len(), data.len());
+}
+
+#[tokio::test]
+async fn test_upload_to_server_blocking_large_file() -> Result<(), Box<dyn std::error::Error>> {
+    use tokio::io::AsyncWriteExt;
+    use tokio::task;
+
+    let dir = tempdir()?;
+    let storage_dir = dir.path().join("storage");
+    let filter = make_routes(storage_dir.clone()).recover(handle_rejection);
+    let (addr, server) = warp::serve(filter).bind_ephemeral(([127, 0, 0, 1], 0));
+    let srv_handle = task::spawn(server);
+
+    let data_path = dir.path().join("data.bin");
+    {
+        let mut f = tokio::fs::File::create(&data_path).await?;
+        f.write_all(&vec![1u8; 5 * 1024 * 1024]).await?;
+    }
+
+    task::spawn_blocking(move || {
+        upload_to_server_blocking(
+            &format!("http://{}", addr),
+            "bucket",
+            data_path.to_str().unwrap(),
+        )
+        .map_err(|e| e.to_string())
+    })
+    .await??;
+
+    srv_handle.abort();
+
+    let stored = storage_dir.join("bucket").join("data.bin");
+    assert!(stored.exists());
+    assert_eq!(std::fs::metadata(stored)?.len(), 5 * 1024 * 1024);
+    Ok(())
 }

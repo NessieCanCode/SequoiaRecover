@@ -54,25 +54,48 @@ pub fn make_routes(
 ) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
     let storage_filter = warp::any().map(move || storage.clone());
 
+    async fn save_stream<S, B>(
+        bucket: String,
+        name: String,
+        mut stream: S,
+        storage: PathBuf,
+    ) -> Result<impl Reply, Rejection>
+    where
+        S: futures::Stream<Item = Result<B, warp::Error>> + Unpin,
+        B: bytes::Buf,
+    {
+        use futures::StreamExt;
+        use tokio::io::AsyncWriteExt;
+
+        if !valid_segment(&bucket) || !valid_segment(&name) {
+            return Err(warp::reject::custom(BadPath));
+        }
+        let dir = storage.join(&bucket);
+        if fs::create_dir_all(&dir).is_err() {
+            return Err(warp::reject());
+        }
+        let path = dir.join(&name);
+        let mut file = match tokio::fs::File::create(&path).await {
+            Ok(f) => f,
+            Err(_) => return Err(warp::reject()),
+        };
+        while let Some(chunk) = stream.next().await {
+            let chunk = match chunk {
+                Ok(c) => c,
+                Err(_) => return Err(warp::reject()),
+            };
+            if file.write_all(chunk.chunk()).await.is_err() {
+                return Err(warp::reject());
+            }
+        }
+        Ok::<_, warp::Rejection>(warp::reply())
+    }
+
     let upload = warp::path!("upload" / String / String)
         .and(warp::post())
-        .and(warp::body::bytes())
+        .and(warp::body::stream())
         .and(storage_filter.clone())
-        .and_then(
-            |bucket: String, name: String, data: bytes::Bytes, storage: PathBuf| async move {
-                if !valid_segment(&bucket) || !valid_segment(&name) {
-                    return Err(warp::reject::custom(BadPath));
-                }
-                let dir = storage.join(&bucket);
-                if fs::create_dir_all(&dir).is_err() {
-                    return Err(warp::reject());
-                }
-                if fs::write(dir.join(&name), &data).is_err() {
-                    return Err(warp::reject());
-                }
-                Ok::<_, warp::Rejection>(warp::reply())
-            },
-        );
+        .and_then(save_stream);
 
     let download = warp::path!("download" / String / String)
         .and(warp::get())
