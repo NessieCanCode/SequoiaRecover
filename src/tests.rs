@@ -4,12 +4,15 @@ use crate::backup::{
 use crate::config::{decrypt_config, encrypt_config, Config};
 use crate::remote::show_remote_history_blocking;
 use crate::remote::{download_from_backblaze_blocking, upload_to_backblaze_blocking};
+use crate::server::{handle_rejection, make_routes};
 use filetime::FileTime;
 use serial_test::serial;
 use sha2::{Digest, Sha256};
 use std::fs;
 use std::time::{Duration, SystemTime};
 use tempfile::tempdir;
+use warp::test::request as warp_request;
+use warp::Filter;
 
 #[test]
 fn test_encrypt_decrypt_config_roundtrip() {
@@ -155,4 +158,40 @@ fn test_auto_select_compression_override() {
     assert_eq!(auto_select_compression(Some(1500)), CompressionType::None);
     assert_eq!(auto_select_compression(Some(200)), CompressionType::Gzip);
     assert_eq!(auto_select_compression(Some(50)), CompressionType::Zstd);
+}
+
+#[tokio::test]
+async fn test_server_rejects_malicious_paths() {
+    let dir = tempdir().unwrap();
+    let filter = make_routes(dir.path().into()).recover(handle_rejection);
+
+    let resp = warp_request()
+        .method("POST")
+        .path("/upload/%2e%2e/file.txt")
+        .body("data")
+        .reply(&filter)
+        .await;
+    assert_eq!(resp.status(), 400);
+
+    let resp = warp_request()
+        .method("POST")
+        .path("/upload/bucket/foo%2Fbar")
+        .body("data")
+        .reply(&filter)
+        .await;
+    assert_eq!(resp.status(), 400);
+
+    let resp = warp_request()
+        .method("GET")
+        .path("/download/%2e%2e/file.txt")
+        .reply(&filter)
+        .await;
+    assert_eq!(resp.status(), 400);
+
+    let resp = warp_request()
+        .method("GET")
+        .path("/list/%2e%2e")
+        .reply(&filter)
+        .await;
+    assert_eq!(resp.status(), 400);
 }
