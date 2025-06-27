@@ -60,6 +60,8 @@ SequoiaRecover choose a compression method based on your network speed (measured
 over about 5 seconds) to help reduce transfer costs. Use `--compression-threshold`
 to provide a link speed in Mbps and override the automatic detection when needed.
 Add `--reject-suspicious` to refuse uploading a backup if ransomware patterns are detected.
+Use `--max-upload-mbps` or `--max-download-mbps` to limit how much bandwidth the tool
+consumes when transferring data.
 To run automated backups every hour:
 ```bash
 sequoiarecover schedule --source /path/to/data --bucket my-bucket --interval 3600 --mode incremental
