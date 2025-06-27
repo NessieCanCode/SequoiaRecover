@@ -1,6 +1,6 @@
 use chrono::TimeZone;
 use directories::ProjectDirs;
-use eframe::egui::{self, ComboBox, TextEdit};
+use eframe::egui::{self, ComboBox, TextEdit, RichText};
 use rfd::FileDialog;
 use sequoiarecover::backup::{
     restore_backup, run_backup_with_progress, BackupMode, CompressionType,
@@ -14,6 +14,8 @@ use sequoiarecover::remote::{
 use sequoiarecover::server_client::{restore_server_backup_blocking, upload_to_server_blocking};
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
+use tracing::info;
+use tracing_subscriber::{fmt::MakeWriter, EnvFilter};
 
 #[derive(Serialize, Deserialize, Default)]
 struct GuiConfig {
@@ -37,6 +39,8 @@ struct GuiConfig {
     bucket: String,
     #[serde(default)]
     server_url: String,
+    #[serde(default)]
+    log_level: LogLevel,
 }
 
 #[derive(Serialize, Deserialize, PartialEq, Clone, Debug, Default)]
@@ -57,6 +61,21 @@ enum BackupDestination {
     Aws,
     Azure,
     Server,
+}
+
+#[derive(Serialize, Deserialize, PartialEq, Clone, Debug)]
+enum LogLevel {
+    Error,
+    Warn,
+    Info,
+    Debug,
+    Trace,
+}
+
+impl Default for LogLevel {
+    fn default() -> Self {
+        LogLevel::Info
+    }
 }
 
 enum Tab {
@@ -81,10 +100,17 @@ struct App {
     history: Vec<HistoryEntry>,
     status: Arc<Mutex<String>>,
     progress: Arc<Mutex<f32>>,
+    logs: Arc<Mutex<String>>,
+    log_level: LogLevel,
     account_id: String,
     application_key: String,
     password: String,
     confirm: String,
+    aws_access_key: String,
+    aws_secret_key: String,
+    aws_region: String,
+    azure_account: String,
+    azure_key: String,
 }
 
 fn load_config() -> GuiConfig {
@@ -121,6 +147,46 @@ fn load_history() -> Vec<HistoryEntry> {
     } else {
         Vec::new()
     }
+}
+
+struct GuiWriter {
+    logs: Arc<Mutex<String>>,
+}
+
+impl<'a> MakeWriter<'a> for GuiWriter {
+    type Writer = GuiWriter;
+    fn make_writer(&'a self) -> Self::Writer {
+        GuiWriter {
+            logs: self.logs.clone(),
+        }
+    }
+}
+
+impl std::io::Write for GuiWriter {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        let s = String::from_utf8_lossy(buf);
+        let mut logs = self.logs.lock().unwrap();
+        logs.push_str(&s);
+        Ok(buf.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+fn setup_logging(logs: Arc<Mutex<String>>, level: LogLevel) {
+    let writer = GuiWriter { logs };
+    let filter = match level {
+        LogLevel::Error => "error",
+        LogLevel::Warn => "warn",
+        LogLevel::Info => "info",
+        LogLevel::Debug => "debug",
+        LogLevel::Trace => "trace",
+    };
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(EnvFilter::new(filter))
+        .with_writer(writer)
+        .try_init();
 }
 
 impl eframe::App for App {
@@ -236,6 +302,7 @@ impl eframe::App for App {
                     let status = self.status.clone();
                     let progress = self.progress.clone();
                     std::thread::spawn(move || {
+                        info!("Starting backup from {} to {}", source, output);
                         let res = run_backup_with_progress(
                             &source,
                             &output,
@@ -261,6 +328,7 @@ impl eframe::App for App {
                             Ok(_) => "Backup complete".to_string(),
                             Err(e) => format!("Error: {}", e),
                         };
+                        info!("Backup task finished");
                     });
                     save_config(&GuiConfig {
                         source: self.source.clone(),
@@ -273,6 +341,7 @@ impl eframe::App for App {
                         restore_method: self.restore_method.clone(),
                         bucket: self.bucket.clone(),
                         server_url: self.server_url.clone(),
+                        log_level: self.log_level.clone(),
                     });
                     self.history = load_history();
                 }
@@ -281,6 +350,12 @@ impl eframe::App for App {
                 let value = *self.progress.lock().unwrap();
                 ui.add(egui::ProgressBar::new(value).show_percentage());
                 ui.label(format!("{:.0}%", value * 100.0));
+                let logs = self.logs.lock().unwrap().clone();
+                egui::ScrollArea::vertical()
+                    .max_height(150.0)
+                    .show(ui, |ui| {
+                        ui.label(RichText::new(logs).monospace());
+                    });
             }
             Tab::Restore => {
                 ui.heading("Restore Backup");
@@ -360,6 +435,7 @@ impl eframe::App for App {
                     let application_key = self.application_key.clone();
                     let status = self.status.clone();
                     std::thread::spawn(move || {
+                        info!("Starting restore of {}", src);
                         let res = match method {
                             RestoreMethod::Local => restore_backup(&src, &dst, None),
                             RestoreMethod::Backblaze => restore_remote_backup_blocking(
@@ -408,6 +484,7 @@ impl eframe::App for App {
                             Ok(_) => "Restore complete".to_string(),
                             Err(e) => format!("Error: {}", e),
                         };
+                        info!("Restore task finished");
                     });
                     save_config(&GuiConfig {
                         source: self.source.clone(),
@@ -420,10 +497,17 @@ impl eframe::App for App {
                         restore_method: self.restore_method.clone(),
                         bucket: self.bucket.clone(),
                         server_url: self.server_url.clone(),
+                        log_level: self.log_level.clone(),
                     });
                 }
                 let msg = self.status.lock().unwrap().clone();
                 ui.label(msg);
+                let logs = self.logs.lock().unwrap().clone();
+                egui::ScrollArea::vertical()
+                    .max_height(150.0)
+                    .show(ui, |ui| {
+                        ui.label(RichText::new(logs).monospace());
+                    });
             }
             Tab::History => {
                 ui.heading("Backup History");
@@ -499,21 +583,79 @@ impl eframe::App for App {
                 }
                 let msg = self.status.lock().unwrap().clone();
                 ui.label(msg);
+                ui.separator();
+                ui.heading("Logging");
+                ComboBox::from_label("Level")
+                    .selected_text(format!("{:?}", self.log_level))
+                    .show_ui(ui, |ui| {
+                        ui.selectable_value(&mut self.log_level, LogLevel::Error, "Error");
+                        ui.selectable_value(&mut self.log_level, LogLevel::Warn, "Warn");
+                        ui.selectable_value(&mut self.log_level, LogLevel::Info, "Info");
+                        ui.selectable_value(&mut self.log_level, LogLevel::Debug, "Debug");
+                        ui.selectable_value(&mut self.log_level, LogLevel::Trace, "Trace");
+                    });
+                ui.separator();
+                ui.heading("AWS Credentials");
+                ui.horizontal(|ui| {
+                    ui.label("Access Key:");
+                    ui.text_edit_singleline(&mut self.aws_access_key);
+                });
+                ui.horizontal(|ui| {
+                    ui.label("Secret Key:");
+                    ui.text_edit_singleline(&mut self.aws_secret_key);
+                });
+                ui.horizontal(|ui| {
+                    ui.label("Region:");
+                    ui.text_edit_singleline(&mut self.aws_region);
+                });
+                ui.separator();
+                ui.heading("Azure Credentials");
+                ui.horizontal(|ui| {
+                    ui.label("Account:");
+                    ui.text_edit_singleline(&mut self.azure_account);
+                });
+                ui.horizontal(|ui| {
+                    ui.label("Key:");
+                    ui.text_edit_singleline(&mut self.azure_key);
+                });
+                if ui.button("Apply").clicked() {
+                    std::env::set_var("AWS_ACCESS_KEY_ID", &self.aws_access_key);
+                    std::env::set_var("AWS_SECRET_ACCESS_KEY", &self.aws_secret_key);
+                    std::env::set_var("AWS_REGION", &self.aws_region);
+                    std::env::set_var("AZURE_STORAGE_ACCOUNT", &self.azure_account);
+                    std::env::set_var("AZURE_STORAGE_KEY", &self.azure_key);
+                    save_config(&GuiConfig {
+                        source: self.source.clone(),
+                        output: self.output.clone(),
+                        restore_path: self.restore_path.clone(),
+                        restore_dest: self.restore_dest.clone(),
+                        compression: self.compression,
+                        mode: self.mode,
+                        destination: self.destination.clone(),
+                        restore_method: self.restore_method.clone(),
+                        bucket: self.bucket.clone(),
+                        server_url: self.server_url.clone(),
+                        log_level: self.log_level.clone(),
+                    });
+                    setup_logging(self.logs.clone(), self.log_level.clone());
+                }
             }
         });
     }
 }
 
 fn main() -> Result<(), eframe::Error> {
+    let cfg = load_config();
+    let logs = Arc::new(Mutex::new(String::new()));
+    setup_logging(logs.clone(), cfg.log_level.clone());
     eframe::run_native(
         "SequoiaRecover",
         eframe::NativeOptions::default(),
-        Box::new(|_cc| {
-            let cfg = load_config();
+        Box::new(move |_cc| {
             Ok(Box::new(App {
                 tab: Tab::Backup,
-                source: cfg.source,
-                output: cfg.output,
+                source: cfg.source.clone(),
+                output: cfg.output.clone(),
                 compression: cfg.compression,
                 mode: cfg.mode,
                 destination: cfg.destination,
@@ -525,10 +667,17 @@ fn main() -> Result<(), eframe::Error> {
                 history: load_history(),
                 status: Arc::new(Mutex::new(String::new())),
                 progress: Arc::new(Mutex::new(0.0)),
+                logs,
+                log_level: cfg.log_level,
                 account_id: String::new(),
                 application_key: String::new(),
                 password: String::new(),
                 confirm: String::new(),
+                aws_access_key: String::new(),
+                aws_secret_key: String::new(),
+                aws_region: String::new(),
+                azure_account: String::new(),
+                azure_key: String::new(),
             }))
         }),
     )
