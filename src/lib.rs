@@ -1,7 +1,9 @@
 pub mod backup;
 pub mod config;
-pub mod remote;
+#[cfg(feature = "hardware-auth")]
+pub mod hardware_key;
 pub mod monitor;
+pub mod remote;
 pub mod throttle;
 
 #[cfg(test)]

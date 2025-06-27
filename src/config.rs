@@ -77,6 +77,10 @@ pub fn get_or_create_archive_salt() -> Result<Vec<u8>, Box<dyn Error>> {
 }
 
 pub fn load_archive_salt() -> Result<Vec<u8>, Box<dyn Error>> {
+    #[cfg(feature = "hardware-auth")]
+    if let Ok(key) = crate::hardware_key::load_key() {
+        return Ok(key);
+    }
     let path = salt_file_path()?;
     if !path.exists() {
         return Err("Encryption key missing. Generate it with 'keygen'".into());

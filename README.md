@@ -143,6 +143,14 @@ A modern GUI lives under `ui/`. Build it with `cargo run -p ui` to open a cross-
 ### Encryption & Key Management
 
 Use `sequoiarecover init` to store cloud credentials. Run `keygen` once to create an archive encryption key and `keyrotate` whenever the key needs to be replaced.
+When compiled with the `hardware-auth` feature, you can store the key on a connected YubiKey or HSM:
+
+```bash
+cargo build --release --features hardware-auth
+sequoiarecover keygen --hardware
+sequoiarecover init --hardware
+```
+The backup commands will automatically retrieve the key from the device.
 
 ### Resumable Uploads & Deduplication
 

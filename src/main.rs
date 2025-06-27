@@ -189,9 +189,18 @@ enum Commands {
         /// Store credentials in the OS keychain
         #[arg(long, default_value_t = false)]
         keyring: bool,
+        /// Store archive key on a connected hardware token
+        #[cfg(feature = "hardware-auth")]
+        #[arg(long, default_value_t = false)]
+        hardware: bool,
     },
     /// Generate encryption key used for archive encryption
-    Keygen,
+    Keygen {
+        /// Store the generated key on a connected hardware token
+        #[cfg(feature = "hardware-auth")]
+        #[arg(long, default_value_t = false)]
+        hardware: bool,
+    },
     /// Rotate to a new encryption key
     Keyrotate,
     /// Generate the SequoiaRecover man page
@@ -698,7 +707,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
         }
-        Commands::Init { keyring } => match config_file_path() {
+        Commands::Init {
+            keyring,
+            #[cfg(feature = "hardware-auth")]
+            hardware,
+        } => match config_file_path() {
             Ok(path) => {
                 let account_id =
                     rpassword::prompt_password("Backblaze Account ID: ").unwrap_or_default();
@@ -740,11 +753,39 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         Err(e) => eprintln!("Failed to encrypt config: {}", e),
                     }
                 }
+                #[cfg(feature = "hardware-auth")]
+                if hardware {
+                    match get_or_create_archive_salt() {
+                        Ok(salt) => {
+                            if let Err(e) = sequoiarecover::hardware_key::store_key(&salt) {
+                                eprintln!("Failed to store key on hardware token: {}", e);
+                            } else {
+                                println!("Archive key stored on hardware token");
+                            }
+                        }
+                        Err(e) => eprintln!("{}", e),
+                    }
+                }
             }
             Err(e) => eprintln!("{}", e),
         },
-        Commands::Keygen => match get_or_create_archive_salt() {
-            Ok(_) => println!("Encryption key generated"),
+        Commands::Keygen {
+            #[cfg(feature = "hardware-auth")]
+            hardware,
+        } => match get_or_create_archive_salt() {
+            Ok(salt) => {
+                #[cfg(feature = "hardware-auth")]
+                if hardware {
+                    match sequoiarecover::hardware_key::store_key(&salt) {
+                        Ok(_) => println!("Encryption key stored on hardware token"),
+                        Err(e) => eprintln!("Failed to store key on hardware token: {}", e),
+                    }
+                } else {
+                    println!("Encryption key generated");
+                }
+                #[cfg(not(feature = "hardware-auth"))]
+                println!("Encryption key generated");
+            }
             Err(e) => eprintln!("{}", e),
         },
         Commands::Keyrotate => match get_or_create_archive_salt() {
