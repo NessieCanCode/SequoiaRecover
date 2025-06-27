@@ -32,6 +32,27 @@ jobs:
           override: true
       - name: Build CLI and GUI
         run: cargo build --release --target ${{ matrix.target }} --bins
+      - name: Build installers
+        shell: bash
+        run: |
+          mkdir -p dist
+          if [ "${{ matrix.os }}" = "ubuntu-latest" ]; then
+            cargo install cargo-deb --locked
+            cargo install cargo-generate-rpm --locked
+            cargo deb --target ${{ matrix.target }} --no-build
+            cargo generate-rpm --target ${{ matrix.target }}
+            cp target/${{ matrix.target }}/debian/*.deb dist/ || true
+            cp target/${{ matrix.target }}/rpm/*.rpm dist/ || true
+          elif [ "${{ matrix.os }}" = "windows-latest" ]; then
+            cargo install cargo-wix --locked
+            cargo wix --target ${{ matrix.target }}
+            mv *.msi dist/sequoiarecover.msi
+          else
+            mkdir dmgdir
+            cp target/${{ matrix.target }}/release/sequoiarecover dmgdir/
+            cp target/${{ matrix.target }}/release/sequoiarecover-gui dmgdir/
+            hdiutil create -volname SequoiaRecover -srcfolder dmgdir -ov -format UDZO dist/sequoiarecover.dmg
+          fi
       - name: Sign binaries (Windows)
         if: matrix.os == 'windows-latest' && env.WINDOWS_CERTIFICATE && env.WINDOWS_CERT_PASSWORD
         shell: pwsh
@@ -60,20 +81,22 @@ jobs:
       - name: Package
         shell: bash
         run: |
-          mkdir dist
+          if [ ! -d dist ]; then mkdir dist; fi
           if [ "${{ matrix.os }}" = "windows-latest" ]; then
             cp target/${{ matrix.target }}/release/sequoiarecover.exe dist/
             cp target/${{ matrix.target }}/release/sequoiarecover-gui.exe dist/
-            7z a ${{ matrix.archive }} dist/*
+            7z a ${{ matrix.archive }} dist/sequoiarecover.exe dist/sequoiarecover-gui.exe
           else
             cp target/${{ matrix.target }}/release/sequoiarecover dist/
             cp target/${{ matrix.target }}/release/sequoiarecover-gui dist/
-            zip -j ${{ matrix.archive }} dist/*
+            zip -j ${{ matrix.archive }} dist/sequoiarecover dist/sequoiarecover-gui
           fi
       - uses: actions/upload-artifact@v3
         with:
-          name: ${{ matrix.archive }}
-          path: ${{ matrix.archive }}
+          name: ${{ matrix.os }}-artifacts
+          path: |
+            ${{ matrix.archive }}
+            dist/*
   release:
     needs: build
     runs-on: ubuntu-latest
