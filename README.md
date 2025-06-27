@@ -16,6 +16,7 @@
 - Automated backup scheduling
 - Easy CLI with `init`, `keygen`, and `keyrotate`
 - Management server and modern GUI
+- Ransomware detection with optional upload refusal
 - Focus on disaster recovery and business continuity
 - View past backup history and inspect archives
 - Restore files from any provider
@@ -58,6 +59,7 @@ You can control compression with `--compression`. Passing `auto` lets
 SequoiaRecover choose a compression method based on your network speed (measured
 over about 5 seconds) to help reduce transfer costs. Use `--compression-threshold`
 to provide a link speed in Mbps and override the automatic detection when needed.
+Add `--reject-suspicious` to refuse uploading a backup if ransomware patterns are detected.
 To run automated backups every hour:
 ```bash
 sequoiarecover schedule --source /path/to/data --bucket my-bucket --interval 3600 --mode incremental
@@ -130,6 +132,7 @@ Custom providers can be defined in `~/.sequoiarecover/providers.json`. Each entr
 ### Management Server
 
 The `management-server/` crate implements a lightweight web service for administering users and orchestrating backups across machines. Launch it with `cargo run -p management-server` and use the REST API to register users, assign roles and inspect the audit log.
+Clients can POST security alerts to the `/alert` endpoint. Set the `MGMT_CONSOLE_URL` environment variable on backup hosts so alerts are delivered automatically.
 
 ### Graphical Interface
 
