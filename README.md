@@ -48,9 +48,9 @@ Run the backup tool:
 ```
 
 ### Usage
-Example command to perform a backup:
+Example command to perform a backup replicated to Backblaze and AWS:
 ```bash
-sequoiarecover backup --source /path/to/data --cloud backblaze --bucket my-bucket --mode full
+sequoiarecover backup --source /path/to/data --cloud backblaze,aws --bucket my-bucket --mode full
 ```
 The `--mode` flag controls whether a **full** or **incremental** backup is performed.
 Add `--keyring` to read Backblaze credentials from your keychain if you used `sequoiarecover init --keyring`.
@@ -72,9 +72,13 @@ List the contents of a backup archive from Backblaze without downloading:
 ```bash
 sequoiarecover list --backup backup.tar --bucket my-bucket
 ```
-Restore a backup directly from Backblaze:
+Restore a backup automatically from any provider:
 ```bash
-sequoiarecover restore --backup backup.tar --bucket my-bucket --destination /restore/path
+sequoiarecover restore --backup backup.tar --bucket my-bucket --cloud auto --destination /restore/path
+```
+Verify that all providers have a given archive:
+```bash
+sequoiarecover verify --backup backup.tar --bucket my-bucket
 ```
 Check available commands and options:
 ```bash
