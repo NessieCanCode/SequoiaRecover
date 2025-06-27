@@ -13,7 +13,7 @@ pub fn upload_to_server_blocking(
     file_path: &str,
 ) -> Result<(), Box<dyn Error>> {
     let client = Client::new();
-    let data = std::fs::read(file_path)?;
+    let len = std::fs::metadata(file_path)?.len();
     let name = Path::new(file_path)
         .file_name()
         .ok_or("invalid file")?
@@ -26,7 +26,11 @@ pub fn upload_to_server_blocking(
     );
     let mut delay = Duration::from_secs(1);
     for attempt in 0..3 {
-        let resp = client.post(&url).body(data.clone()).send();
+        let file = std::fs::File::open(file_path)?;
+        let resp = client
+            .post(&url)
+            .body(reqwest::blocking::Body::sized(file, len))
+            .send();
         match resp {
             Ok(r) if r.status().is_success() => return Ok(()),
             Ok(r) => {
