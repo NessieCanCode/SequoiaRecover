@@ -19,6 +19,7 @@ struct User {
 struct AppState {
     users: Mutex<HashMap<String, User>>, // username -> User
     audit: Mutex<Vec<String>>,          // simple audit log strings
+    alerts: Mutex<Vec<String>>,         // received security alerts
     jwt_secret: Vec<u8>,
 }
 
@@ -150,11 +151,34 @@ async fn audit_log(data: web::Data<AppState>, req: HttpRequest) -> impl Responde
     HttpResponse::Unauthorized().finish()
 }
 
+#[derive(Deserialize)]
+struct AlertMsg { message: String }
+
+async fn push_alert(data: web::Data<AppState>, msg: web::Json<AlertMsg>) -> impl Responder {
+    data.alerts.lock().unwrap().push(msg.message.clone());
+    HttpResponse::Ok().finish()
+}
+
+async fn list_alerts(data: web::Data<AppState>, req: HttpRequest) -> impl Responder {
+    let token = req
+        .headers()
+        .get("Authorization")
+        .and_then(|h| h.to_str().ok())
+        .unwrap_or("");
+    if let Some((_, roles)) = verify_token(&data, token) {
+        if roles.contains(&"admin".to_string()) {
+            let alerts = data.alerts.lock().unwrap();
+            return HttpResponse::Ok().json(&*alerts);
+        }
+    }
+    HttpResponse::Unauthorized().finish()
+}
+
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
     let mut rng = rand::thread_rng();
     let secret: [u8; 32] = rng.gen();
-    let data = web::Data::new(AppState { users: Mutex::new(HashMap::new()), audit: Mutex::new(Vec::new()), jwt_secret: secret.to_vec() });
+    let data = web::Data::new(AppState { users: Mutex::new(HashMap::new()), audit: Mutex::new(Vec::new()), alerts: Mutex::new(Vec::new()), jwt_secret: secret.to_vec() });
     HttpServer::new(move || {
         App::new()
             .app_data(data.clone())
@@ -163,6 +187,8 @@ async fn main() -> std::io::Result<()> {
             .route("/users", web::get().to(list_users))
             .route("/roles", web::post().to(add_role))
             .route("/audit", web::get().to(audit_log))
+            .route("/alert", web::post().to(push_alert))
+            .route("/alerts", web::get().to(list_alerts))
     })
     .bind(("0.0.0.0", 8080))?
     .run()

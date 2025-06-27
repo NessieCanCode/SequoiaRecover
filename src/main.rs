@@ -67,6 +67,9 @@ enum Commands {
         /// Override detected link speed in Mbps when using auto compression
         #[arg(long)]
         compression_threshold: Option<u64>,
+        /// Abort upload if suspicious files are detected
+        #[arg(long, default_value_t = false)]
+        reject_suspicious: bool,
     },
     /// Schedule automated backups at a fixed interval (in seconds)
     Schedule {
@@ -100,6 +103,9 @@ enum Commands {
         /// Override detected link speed in Mbps when using auto compression
         #[arg(long)]
         compression_threshold: Option<u64>,
+        /// Abort upload if suspicious files are detected
+        #[arg(long, default_value_t = false)]
+        reject_suspicious: bool,
         /// Interval in seconds between backups
         #[arg(long, default_value_t = 3600)]
         interval: u64,
@@ -204,6 +210,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             application_key,
             keyring,
             compression_threshold,
+            reject_suspicious,
         } => {
             let actual_compression = if compression == CompressionType::Auto {
                 let c = auto_select_compression(compression_threshold);
@@ -221,6 +228,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 eprintln!("Backup failed: {}", e);
             } else {
                 println!("Backup written to {}", output_path);
+                let suspicious = match sequoiarecover::monitor::scan_for_ransomware(&source) {
+                    Ok(Some(msg)) => {
+                        println!("Warning: {}", msg);
+                        sequoiarecover::monitor::send_alert(&msg);
+                        true
+                    }
+                    Ok(None) => false,
+                    Err(e) => {
+                        eprintln!("Scan failed: {}", e);
+                        false
+                    }
+                };
+                if suspicious && reject_suspicious {
+                    println!("Suspicious content detected; upload aborted");
+                    return Ok(());
+                }
                 let enc_path = format!("{}.enc", output_path);
                 if let Ok((id, key)) =
                     load_credentials(account_id.clone(), application_key.clone(), keyring)
@@ -312,6 +335,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             application_key,
             keyring,
             compression_threshold,
+            reject_suspicious,
             interval,
             max_runs,
             mode,
@@ -338,6 +362,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     eprintln!("Scheduled backup failed: {}", e);
                 } else {
                     println!("Scheduled backup written to {}", output_path);
+                    let suspicious = match sequoiarecover::monitor::scan_for_ransomware(&source) {
+                        Ok(Some(msg)) => {
+                            println!("Warning: {}", msg);
+                            sequoiarecover::monitor::send_alert(&msg);
+                            true
+                        }
+                        Ok(None) => false,
+                        Err(e) => {
+                            eprintln!("Scan failed: {}", e);
+                            false
+                        }
+                    };
+                    if suspicious && reject_suspicious {
+                        println!("Suspicious content detected; upload aborted");
+                        run_count += 1;
+                        sleep(Duration::from_secs(interval));
+                        continue;
+                    }
                     let mut uploaded = Vec::new();
                     for cloud in &clouds {
                         if let Some(p) = sequoiarecover::remote::get_provider(cloud) {
