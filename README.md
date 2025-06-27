@@ -20,6 +20,7 @@
 - Focus on disaster recovery and business continuity
 - View past backup history and inspect archives
 - Restore files from any provider
+- Compliance reports with PDF/HTML summaries
 ---
 
 ## Getting Started
@@ -150,7 +151,7 @@ Backups are uploaded in chunks so interrupted transfers resume automatically. A 
 
 ### Upcoming Tasks
 
-Planned enhancements include a zero-knowledge architecture, compliance reporting, hardware security key support and network throttling options.
+Planned enhancements include a zero-knowledge architecture, hardware security key support and network throttling options.
 ### Logging
 
 SequoiaRecover uses the `tracing` crate for logging. Enable detailed output by
