@@ -143,7 +143,8 @@ A modern GUI lives under `ui/`. Build it with `cargo run -p ui` to open a cross-
 
 ### Encryption & Key Management
 
-Use `sequoiarecover init` to store cloud credentials. Run `keygen` once to create an archive encryption key and `keyrotate` whenever the key needs to be replaced.
+Use `sequoiarecover init` to store cloud credentials. Run `sequoiarecover keygen` once to create a zero‑knowledge archive key stored in `~/.sequoiarecover/archive_key`. This key is required for all backup and restore operations and is never uploaded. Rotate it at any time with `sequoiarecover keyrotate`.
+The CLI automatically loads this key when encrypting or decrypting archives.
 
 ### Resumable Uploads & Deduplication
 

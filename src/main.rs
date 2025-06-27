@@ -4,8 +4,8 @@ use sequoiarecover::backup::{
 };
 use sequoiarecover::compliance;
 use sequoiarecover::config::{
-    config_file_path, derive_archive_key, encrypt_config, get_or_create_archive_salt,
-    load_archive_salt, load_credentials, read_history, salt_file_path, show_history,
+    config_file_path, encrypt_config, get_or_create_local_key, load_local_key,
+    load_credentials, local_key_file_path, read_history, show_history,
     store_credentials_keyring, update_backup_providers, Config,
 };
 use sequoiarecover::remote::{
@@ -268,19 +268,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     return Ok(());
                 }
                 let enc_path = format!("{}.enc", output_path);
-                if let Ok((id, key)) =
-                    load_credentials(account_id.clone(), application_key.clone(), keyring)
-                {
-                    match get_or_create_archive_salt() {
-                        Ok(salt) => {
-                            let k = derive_archive_key(&id, &key, &salt);
-                            if let Err(e) = encrypt_file(&output_path, &enc_path, &k) {
-                                eprintln!("Encryption failed: {}", e);
-                                return Err(e);
-                            }
-                            let _ = std::fs::remove_file(&output_path);
+                match get_or_create_local_key() {
+                    Ok(k) => {
+                        if let Err(e) = encrypt_file(&output_path, &enc_path, &k) {
+                            eprintln!("Encryption failed: {}", e);
+                            return Err(e);
                         }
-                        Err(e) => eprintln!("{}", e),
+                        let _ = std::fs::remove_file(&output_path);
+                    }
+                    Err(e) => {
+                        eprintln!("{}", e);
                     }
                 }
                 let target = &enc_path;
@@ -652,21 +649,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 };
                 match download_res {
                     Ok(()) => {
-                        let salt = match load_archive_salt() {
-                            Ok(s) => s,
+                        let key = match load_local_key() {
+                            Ok(k) => k,
                             Err(e) => return Err(e),
                         };
-                        let (id, key) = match load_credentials(account_id, application_key, keyring)
-                        {
-                            Ok(creds) => creds,
-                            Err(e) => return Err(e),
-                        };
-                        let k = derive_archive_key(&id, &key, &salt);
                         let tmp_plain = tmp_enc.with_extension("tar");
                         let dec_res = decrypt_file(
                             tmp_enc.to_str().unwrap(),
                             tmp_plain.to_str().unwrap(),
-                            &k,
+                            &key,
                         );
                         let res = if dec_res.is_ok() {
                             restore_backup(tmp_plain.to_str().unwrap(), &destination, compression)
@@ -766,16 +757,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             Err(e) => eprintln!("{}", e),
         },
-        Commands::Keygen => match get_or_create_archive_salt() {
+        Commands::Keygen => match get_or_create_local_key() {
             Ok(_) => println!("Encryption key generated"),
             Err(e) => eprintln!("{}", e),
         },
-        Commands::Keyrotate => match get_or_create_archive_salt() {
-            Ok(_) => {
-                let path = salt_file_path().unwrap();
-                let mut salt = [0u8; 16];
-                OsRng.fill_bytes(&mut salt);
-                if let Err(e) = std::fs::write(path, &salt) {
+        Commands::Keyrotate => match local_key_file_path() {
+            Ok(path) => {
+                if let Some(p) = path.parent() {
+                    let _ = std::fs::create_dir_all(p);
+                }
+                let mut key = [0u8; 32];
+                OsRng.fill_bytes(&mut key);
+                if let Err(e) = std::fs::write(&path, &key) {
                     eprintln!("Failed to rotate key: {}", e);
                 } else {
                     println!("Encryption key rotated");
