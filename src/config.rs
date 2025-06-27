@@ -20,6 +20,7 @@ use crate::backup::{BackupMode, CompressionType};
 
 pub const CONFIG_PATH: &str = ".sequoiarecover/config.enc";
 pub const HISTORY_PATH: &str = ".sequoiarecover/history.json";
+pub const LOCAL_KEY_PATH: &str = ".sequoiarecover/archive_key";
 pub const SALT_PATH: &str = ".sequoiarecover/archive_salt";
 pub const KEYRING_SERVICE: &str = "sequoiarecover";
 
@@ -89,6 +90,44 @@ pub fn derive_archive_key(account_id: &str, application_key: &str, salt: &[u8]) 
     let password = format!("{}:{}", account_id, application_key);
     pbkdf2_hmac::<Sha256>(password.as_bytes(), salt, 200_000, &mut key);
     key
+}
+
+pub fn local_key_file_path() -> Result<PathBuf, Box<dyn Error>> {
+    let home = std::env::var("HOME").or_else(|_| std::env::var("USERPROFILE"))?;
+    Ok(PathBuf::from(home).join(LOCAL_KEY_PATH))
+}
+
+pub fn get_or_create_local_key() -> Result<[u8; 32], Box<dyn Error>> {
+    let path = local_key_file_path()?;
+    if path.exists() {
+        let data = std::fs::read(&path)?;
+        if data.len() == 32 {
+            let mut key = [0u8; 32];
+            key.copy_from_slice(&data);
+            return Ok(key);
+        }
+    }
+    if let Some(p) = path.parent() {
+        std::fs::create_dir_all(p)?;
+    }
+    let mut key = [0u8; 32];
+    OsRng.fill_bytes(&mut key);
+    std::fs::write(&path, &key)?;
+    Ok(key)
+}
+
+pub fn load_local_key() -> Result<[u8; 32], Box<dyn Error>> {
+    let path = local_key_file_path()?;
+    if !path.exists() {
+        return Err("Encryption key missing. Generate it with 'keygen'".into());
+    }
+    let data = std::fs::read(&path)?;
+    if data.len() != 32 {
+        return Err("Invalid key length".into());
+    }
+    let mut key = [0u8; 32];
+    key.copy_from_slice(&data);
+    Ok(key)
 }
 
 pub fn encrypt_config(config: &Config, password: &str) -> Result<EncryptedConfig, Box<dyn Error>> {
