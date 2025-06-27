@@ -42,6 +42,8 @@ pub struct HistoryEntry {
     pub backup: String,
     pub mode: BackupMode,
     pub compression: CompressionType,
+    #[serde(default)]
+    pub providers: Vec<String>,
 }
 
 pub fn config_file_path() -> Result<PathBuf, Box<dyn Error>> {
@@ -82,11 +84,7 @@ pub fn load_archive_salt() -> Result<Vec<u8>, Box<dyn Error>> {
     Ok(std::fs::read(path)?)
 }
 
-pub fn derive_archive_key(
-    account_id: &str,
-    application_key: &str,
-    salt: &[u8],
-) -> [u8; 32] {
+pub fn derive_archive_key(account_id: &str, application_key: &str, salt: &[u8]) -> [u8; 32] {
     let mut key = [0u8; 32];
     let password = format!("{}:{}", account_id, application_key);
     pbkdf2_hmac::<Sha256>(password.as_bytes(), salt, 200_000, &mut key);
@@ -203,6 +201,7 @@ pub fn record_backup(
         backup: backup.to_string(),
         mode,
         compression,
+        providers: Vec::new(),
     });
     let f = File::create(&path)?;
     serde_json::to_writer_pretty(f, &history)?;
@@ -220,11 +219,37 @@ pub fn show_history() -> Result<(), Box<dyn Error>> {
     for entry in history {
         let dt: DateTime<Local> = (UNIX_EPOCH + Duration::from_secs(entry.timestamp as u64)).into();
         println!(
-            "{}\t{:?}\t{:?}",
+            "{}\t{:?}\t{}\t{}",
             dt.format("%Y-%m-%d %H:%M:%S"),
             entry.mode,
-            entry.backup
+            entry.backup,
+            entry.providers.join(",")
         );
+    }
+    Ok(())
+}
+
+pub fn read_history() -> Result<Vec<HistoryEntry>, Box<dyn Error>> {
+    let path = history_file_path()?;
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+    let f = File::open(path)?;
+    let history: Vec<HistoryEntry> = serde_json::from_reader(f)?;
+    Ok(history)
+}
+
+pub fn update_backup_providers(backup: &str, providers: &[String]) -> Result<(), Box<dyn Error>> {
+    let path = history_file_path()?;
+    if !path.exists() {
+        return Ok(());
+    }
+    let f = File::open(&path)?;
+    let mut history: Vec<HistoryEntry> = serde_json::from_reader(f)?;
+    if let Some(entry) = history.iter_mut().find(|e| e.backup == backup) {
+        entry.providers = providers.to_vec();
+        let f = File::create(&path)?;
+        serde_json::to_writer_pretty(f, &history)?;
     }
     Ok(())
 }

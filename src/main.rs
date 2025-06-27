@@ -4,8 +4,8 @@ use sequoiarecover::backup::{
 };
 use sequoiarecover::config::{
     config_file_path, derive_archive_key, encrypt_config, get_or_create_archive_salt,
-    load_archive_salt, load_credentials, salt_file_path, show_history, store_credentials_keyring,
-    Config,
+    load_archive_salt, load_credentials, read_history, salt_file_path, show_history,
+    store_credentials_keyring, update_backup_providers, Config,
 };
 use sequoiarecover::remote::{
     download_from_azure_blocking, download_from_backblaze_blocking, download_from_s3_blocking,
@@ -17,10 +17,10 @@ use tracing_subscriber::EnvFilter;
 
 use clap::{CommandFactory, Parser, Subcommand};
 use clap_mangen::Man;
-use std::thread::sleep;
-use std::time::Duration;
 use rand::rngs::OsRng;
 use rand::RngCore;
+use std::thread::sleep;
+use std::time::Duration;
 
 #[derive(Parser)]
 #[command(
@@ -49,9 +49,9 @@ enum Commands {
         /// Backup mode: full or incremental
         #[arg(long, value_enum, default_value_t = BackupMode::Full)]
         mode: BackupMode,
-        /// Destination cloud provider. Placeholder for now
-        #[arg(long, default_value = "backblaze")]
-        cloud: String,
+        /// Destination cloud providers (comma separated or repeated)
+        #[arg(long = "cloud", value_delimiter = ',', default_value = "backblaze")]
+        clouds: Vec<String>,
         /// Bucket name in the cloud provider
         #[arg(long)]
         bucket: String,
@@ -82,9 +82,9 @@ enum Commands {
         /// Backup mode: full or incremental
         #[arg(long, value_enum, default_value_t = BackupMode::Full)]
         mode: BackupMode,
-        /// Destination cloud provider. Placeholder for now
-        #[arg(long, default_value = "backblaze")]
-        cloud: String,
+        /// Destination cloud providers (comma separated or repeated)
+        #[arg(long = "cloud", value_delimiter = ',', default_value = "backblaze")]
+        clouds: Vec<String>,
         /// Bucket name in the cloud provider
         #[arg(long)]
         bucket: String,
@@ -165,6 +165,13 @@ enum Commands {
         #[arg(long, default_value_t = false)]
         keyring: bool,
     },
+    /// Verify replication status of backups
+    Verify {
+        #[arg(long)]
+        backup: Option<String>,
+        #[arg(long)]
+        bucket: String,
+    },
     /// Initialize encrypted configuration
     Init {
         /// Store credentials in the OS keychain
@@ -191,7 +198,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             output,
             compression,
             mode,
-            cloud,
+            clouds,
             bucket,
             account_id,
             application_key,
@@ -207,15 +214,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             };
             let output_path = ensure_extension(&output, actual_compression);
             println!(
-                "Starting backup from {} to {} bucket {} using {:?}",
-                source, cloud, bucket, actual_compression
+                "Starting backup from {} using {:?}",
+                source, actual_compression
             );
             if let Err(e) = run_backup(&source, &output_path, actual_compression, mode) {
                 eprintln!("Backup failed: {}", e);
             } else {
                 println!("Backup written to {}", output_path);
                 let enc_path = format!("{}.enc", output_path);
-                if let Ok((id, key)) = load_credentials(account_id.clone(), application_key.clone(), keyring) {
+                if let Ok((id, key)) =
+                    load_credentials(account_id.clone(), application_key.clone(), keyring)
+                {
                     match get_or_create_archive_salt() {
                         Ok(salt) => {
                             let k = derive_archive_key(&id, &key, &salt);
@@ -229,58 +238,75 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                 }
                 let target = &enc_path;
-                if let Some(p) = sequoiarecover::remote::get_provider(&cloud) {
-                    if let Err(e) = p.upload_blocking(&bucket, target) {
-                        eprintln!("Upload failed: {}", e);
-                    } else {
-                        println!("Uploaded to {} bucket {}", cloud, bucket);
+                let mut uploaded = Vec::new();
+                for cloud in &clouds {
+                    if let Some(p) = sequoiarecover::remote::get_provider(cloud) {
+                        if let Err(e) = p.upload_blocking(&bucket, target) {
+                            eprintln!("Upload to {} failed: {}", cloud, e);
+                        } else {
+                            println!("Uploaded to {} bucket {}", cloud, bucket);
+                            uploaded.push(cloud.clone());
+                        }
+                        continue;
                     }
-                } else if cloud == "backblaze" {
-                    match load_credentials(account_id, application_key, keyring) {
-                        Ok((id, key)) => {
-                            if let Err(e) = upload_to_backblaze_blocking(&id, &key, &bucket, target) {
-                                eprintln!("Upload failed: {}", e);
-                            } else {
-                                println!("Uploaded to Backblaze bucket {}", bucket);
+                    if cloud == "backblaze" {
+                        match load_credentials(account_id.clone(), application_key.clone(), keyring)
+                        {
+                            Ok((id, key)) => {
+                                if let Err(e) =
+                                    upload_to_backblaze_blocking(&id, &key, &bucket, target)
+                                {
+                                    eprintln!("Upload to backblaze failed: {}", e);
+                                } else {
+                                    println!("Uploaded to Backblaze bucket {}", bucket);
+                                    uploaded.push(cloud.clone());
+                                }
                             }
+                            Err(e) => eprintln!("{}", e),
                         }
-                        Err(e) => eprintln!("{}", e),
-                    }
-                } else if cloud == "aws" {
-                    if let (Ok(ak), Ok(sk), Ok(region)) = (
-                        std::env::var("AWS_ACCESS_KEY_ID"),
-                        std::env::var("AWS_SECRET_ACCESS_KEY"),
-                        std::env::var("AWS_REGION"),
-                    ) {
-                        if let Err(e) = upload_to_s3_blocking(&ak, &sk, &region, &bucket, target) {
-                            eprintln!("Upload failed: {}", e);
+                    } else if cloud == "aws" {
+                        if let (Ok(ak), Ok(sk), Ok(region)) = (
+                            std::env::var("AWS_ACCESS_KEY_ID"),
+                            std::env::var("AWS_SECRET_ACCESS_KEY"),
+                            std::env::var("AWS_REGION"),
+                        ) {
+                            if let Err(e) =
+                                upload_to_s3_blocking(&ak, &sk, &region, &bucket, target)
+                            {
+                                eprintln!("Upload to aws failed: {}", e);
+                            } else {
+                                println!("Uploaded to S3 bucket {}", bucket);
+                                uploaded.push(cloud.clone());
+                            }
                         } else {
-                            println!("Uploaded to S3 bucket {}", bucket);
+                            eprintln!("Missing AWS credentials");
+                        }
+                    } else if cloud == "azure" {
+                        if let (Ok(acct), Ok(key)) = (
+                            std::env::var("AZURE_STORAGE_ACCOUNT"),
+                            std::env::var("AZURE_STORAGE_KEY"),
+                        ) {
+                            if let Err(e) = upload_to_azure_blocking(&acct, &key, &bucket, target) {
+                                eprintln!("Upload to azure failed: {}", e);
+                            } else {
+                                println!("Uploaded to Azure container {}", bucket);
+                                uploaded.push(cloud.clone());
+                            }
+                        } else {
+                            eprintln!("Missing Azure credentials");
                         }
                     } else {
-                        eprintln!("Missing AWS credentials");
-                    }
-                } else if cloud == "azure" {
-                    if let (Ok(acct), Ok(key)) = (
-                        std::env::var("AZURE_STORAGE_ACCOUNT"),
-                        std::env::var("AZURE_STORAGE_KEY"),
-                    ) {
-                        if let Err(e) = upload_to_azure_blocking(&acct, &key, &bucket, target) {
-                            eprintln!("Upload failed: {}", e);
-                        } else {
-                            println!("Uploaded to Azure container {}", bucket);
-                        }
-                    } else {
-                        eprintln!("Missing Azure credentials");
+                        eprintln!("Unsupported cloud provider: {}", cloud);
                     }
                 }
+                let _ = update_backup_providers(&output_path, &uploaded);
             }
         }
         Commands::Schedule {
             source,
             output,
             compression,
-            cloud,
+            clouds,
             bucket,
             account_id,
             application_key,
@@ -299,8 +325,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             };
             let output_path = ensure_extension(&output, actual_compression);
             println!(
-                "Scheduling backups every {} seconds from {} to {} bucket {} using {:?}",
-                interval, source, cloud, bucket, actual_compression
+                "Scheduling backups every {} seconds from {} using {:?}",
+                interval, source, actual_compression
             );
             let mut run_count = 0u64;
             loop {
@@ -312,58 +338,76 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     eprintln!("Scheduled backup failed: {}", e);
                 } else {
                     println!("Scheduled backup written to {}", output_path);
-                    if let Some(p) = sequoiarecover::remote::get_provider(&cloud) {
-                        if let Err(e) = p.upload_blocking(&bucket, &output_path) {
-                            eprintln!("Upload failed: {}", e);
-                        } else {
-                            println!("Uploaded to {} bucket {}", cloud, bucket);
+                    let mut uploaded = Vec::new();
+                    for cloud in &clouds {
+                        if let Some(p) = sequoiarecover::remote::get_provider(cloud) {
+                            if let Err(e) = p.upload_blocking(&bucket, &output_path) {
+                                eprintln!("Upload to {} failed: {}", cloud, e);
+                            } else {
+                                println!("Uploaded to {} bucket {}", cloud, bucket);
+                                uploaded.push(cloud.clone());
+                            }
+                            continue;
                         }
-                    } else if cloud == "backblaze" {
-                        match load_credentials(account_id.clone(), application_key.clone(), keyring)
-                        {
-                            Ok((id, key)) => {
-                                if let Err(e) =
-                                    upload_to_backblaze_blocking(&id, &key, &bucket, &output_path)
-                                {
-                                    eprintln!("Upload failed: {}", e);
-                                } else {
-                                    println!("Uploaded to Backblaze bucket {}", bucket);
+                        if cloud == "backblaze" {
+                            match load_credentials(
+                                account_id.clone(),
+                                application_key.clone(),
+                                keyring,
+                            ) {
+                                Ok((id, key)) => {
+                                    if let Err(e) = upload_to_backblaze_blocking(
+                                        &id,
+                                        &key,
+                                        &bucket,
+                                        &output_path,
+                                    ) {
+                                        eprintln!("Upload to backblaze failed: {}", e);
+                                    } else {
+                                        println!("Uploaded to Backblaze bucket {}", bucket);
+                                        uploaded.push(cloud.clone());
+                                    }
                                 }
+                                Err(e) => eprintln!("{}", e),
                             }
-                            Err(e) => eprintln!("{}", e),
-                        }
-                    } else if cloud == "aws" {
-                        if let (Ok(ak), Ok(sk), Ok(region)) = (
-                            std::env::var("AWS_ACCESS_KEY_ID"),
-                            std::env::var("AWS_SECRET_ACCESS_KEY"),
-                            std::env::var("AWS_REGION"),
-                        ) {
-                            if let Err(e) =
-                                upload_to_s3_blocking(&ak, &sk, &region, &bucket, &output_path)
-                            {
-                                eprintln!("Upload failed: {}", e);
+                        } else if cloud == "aws" {
+                            if let (Ok(ak), Ok(sk), Ok(region)) = (
+                                std::env::var("AWS_ACCESS_KEY_ID"),
+                                std::env::var("AWS_SECRET_ACCESS_KEY"),
+                                std::env::var("AWS_REGION"),
+                            ) {
+                                if let Err(e) =
+                                    upload_to_s3_blocking(&ak, &sk, &region, &bucket, &output_path)
+                                {
+                                    eprintln!("Upload to aws failed: {}", e);
+                                } else {
+                                    println!("Uploaded to S3 bucket {}", bucket);
+                                    uploaded.push(cloud.clone());
+                                }
                             } else {
-                                println!("Uploaded to S3 bucket {}", bucket);
+                                eprintln!("Missing AWS credentials");
+                            }
+                        } else if cloud == "azure" {
+                            if let (Ok(acct), Ok(key)) = (
+                                std::env::var("AZURE_STORAGE_ACCOUNT"),
+                                std::env::var("AZURE_STORAGE_KEY"),
+                            ) {
+                                if let Err(e) =
+                                    upload_to_azure_blocking(&acct, &key, &bucket, &output_path)
+                                {
+                                    eprintln!("Upload to azure failed: {}", e);
+                                } else {
+                                    println!("Uploaded to Azure container {}", bucket);
+                                    uploaded.push(cloud.clone());
+                                }
+                            } else {
+                                eprintln!("Missing Azure credentials");
                             }
                         } else {
-                            eprintln!("Missing AWS credentials");
-                        }
-                    } else if cloud == "azure" {
-                        if let (Ok(acct), Ok(key)) = (
-                            std::env::var("AZURE_STORAGE_ACCOUNT"),
-                            std::env::var("AZURE_STORAGE_KEY"),
-                        ) {
-                            if let Err(e) =
-                                upload_to_azure_blocking(&acct, &key, &bucket, &output_path)
-                            {
-                                eprintln!("Upload failed: {}", e);
-                            } else {
-                                println!("Uploaded to Azure container {}", bucket);
-                            }
-                        } else {
-                            eprintln!("Missing Azure credentials");
+                            eprintln!("Unsupported cloud provider: {}", cloud);
                         }
                     }
+                    let _ = update_backup_providers(&output_path, &uploaded);
                 }
                 run_count += 1;
                 sleep(Duration::from_secs(interval));
@@ -483,11 +527,40 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         } => {
             let result = if let Some(b) = bucket {
                 let tmp_enc = std::env::temp_dir().join("backup.enc");
-                let download_res: Result<(), Box<dyn std::error::Error>> = if let Some(p) = sequoiarecover::remote::get_provider(&cloud) {
+                let download_res: Result<(), Box<dyn std::error::Error>> = if cloud == "auto" {
+                    let history = read_history().unwrap_or_default();
+                    if let Some(entry) = history
+                        .into_iter()
+                        .find(|h| h.backup == backup || format!("{}.enc", h.backup) == backup)
+                    {
+                        let remote = if backup.ends_with(".enc") {
+                            backup.clone()
+                        } else {
+                            format!("{}.enc", entry.backup)
+                        };
+                        let mut last_err: Option<Box<dyn std::error::Error>> = None;
+                        for prov in entry.providers {
+                            if let Some(p) = sequoiarecover::remote::get_provider(&prov) {
+                                match p.download_blocking(&b, &remote, &tmp_enc) {
+                                    Ok(_) => {
+                                        last_err = None;
+                                        break;
+                                    }
+                                    Err(e) => last_err = Some(e),
+                                }
+                            }
+                        }
+                        last_err.map_or(Ok(()), Err)
+                    } else {
+                        Err("History entry not found".into())
+                    }
+                } else if let Some(p) = sequoiarecover::remote::get_provider(&cloud) {
                     p.download_blocking(&b, &backup, &tmp_enc)
                 } else if cloud == "backblaze" {
                     match load_credentials(account_id.clone(), application_key.clone(), keyring) {
-                        Ok((id, key)) => download_from_backblaze_blocking(&id, &key, &b, &backup, &tmp_enc),
+                        Ok((id, key)) => {
+                            download_from_backblaze_blocking(&id, &key, &b, &backup, &tmp_enc)
+                        }
                         Err(e) => Err(e),
                     }
                 } else if cloud == "aws" {
@@ -518,13 +591,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             Ok(s) => s,
                             Err(e) => return Err(e),
                         };
-                        let (id, key) = match load_credentials(account_id, application_key, keyring) {
+                        let (id, key) = match load_credentials(account_id, application_key, keyring)
+                        {
                             Ok(creds) => creds,
                             Err(e) => return Err(e),
                         };
                         let k = derive_archive_key(&id, &key, &salt);
                         let tmp_plain = tmp_enc.with_extension("tar");
-                        let dec_res = decrypt_file(tmp_enc.to_str().unwrap(), tmp_plain.to_str().unwrap(), &k);
+                        let dec_res = decrypt_file(
+                            tmp_enc.to_str().unwrap(),
+                            tmp_plain.to_str().unwrap(),
+                            &k,
+                        );
                         let res = if dec_res.is_ok() {
                             restore_backup(tmp_plain.to_str().unwrap(), &destination, compression)
                         } else {
@@ -541,6 +619,34 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             };
             if let Err(e) = result {
                 eprintln!("{}", e);
+            }
+        }
+        Commands::Verify { backup, bucket } => {
+            let history = match read_history() {
+                Ok(h) => h,
+                Err(e) => {
+                    eprintln!("{}", e);
+                    Vec::new()
+                }
+            };
+            let entries: Vec<_> = match backup {
+                Some(b) => history.into_iter().filter(|h| h.backup == b).collect(),
+                None => history,
+            };
+            for entry in entries {
+                let remote_name = format!("{}.enc", entry.backup);
+                for provider in &entry.providers {
+                    if let Some(p) = sequoiarecover::remote::get_provider(provider) {
+                        let tmp = std::env::temp_dir().join("verify.tmp");
+                        match p.download_blocking(&bucket, &remote_name, &tmp) {
+                            Ok(_) => {
+                                let _ = std::fs::remove_file(&tmp);
+                                println!("{} present on {}", remote_name, provider);
+                            }
+                            Err(e) => println!("{} missing on {}: {}", remote_name, provider, e),
+                        }
+                    }
+                }
             }
         }
         Commands::Init { keyring } => match config_file_path() {
