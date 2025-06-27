@@ -177,6 +177,7 @@ fn main() {
         .with_env_filter(EnvFilter::from_default_env())
         .init();
     let cli = Cli::parse();
+    let _ = sequoiarecover::remote::load_providers_from_config();
     match cli.command {
         Commands::Backup {
             source,
@@ -206,7 +207,13 @@ fn main() {
                 eprintln!("Backup failed: {}", e);
             } else {
                 println!("Backup written to {}", output_path);
-                if cloud == "backblaze" {
+                if let Some(p) = sequoiarecover::remote::get_provider(&cloud) {
+                    if let Err(e) = p.upload_blocking(&bucket, &output_path) {
+                        eprintln!("Upload failed: {}", e);
+                    } else {
+                        println!("Uploaded to {} bucket {}", cloud, bucket);
+                    }
+                } else if cloud == "backblaze" {
                     match load_credentials(account_id, application_key, keyring) {
                         Ok((id, key)) => {
                             if let Err(e) =
@@ -288,7 +295,13 @@ fn main() {
                     eprintln!("Scheduled backup failed: {}", e);
                 } else {
                     println!("Scheduled backup written to {}", output_path);
-                    if cloud == "backblaze" {
+                    if let Some(p) = sequoiarecover::remote::get_provider(&cloud) {
+                        if let Err(e) = p.upload_blocking(&bucket, &output_path) {
+                            eprintln!("Upload failed: {}", e);
+                        } else {
+                            println!("Uploaded to {} bucket {}", cloud, bucket);
+                        }
+                    } else if cloud == "backblaze" {
                         match load_credentials(account_id.clone(), application_key.clone(), keyring)
                         {
                             Ok((id, key)) => {
@@ -352,7 +365,11 @@ fn main() {
                 .map(|d| Duration::from_secs(d * 24 * 3600))
                 .or_else(|| retain_weeks.map(|w| Duration::from_secs(w * 7 * 24 * 3600)));
             if let Some(b) = bucket {
-                if cloud == "backblaze" {
+                if let Some(p) = sequoiarecover::remote::get_provider(&cloud) {
+                    if let Err(e) = p.show_history_blocking(&b, retention) {
+                        eprintln!("{}", e);
+                    }
+                } else if cloud == "backblaze" {
                     match load_credentials(account_id, application_key, keyring) {
                         Ok((id, key)) => {
                             if let Err(e) = show_remote_history_blocking(&id, &key, &b, retention) {
@@ -399,7 +416,9 @@ fn main() {
             keyring,
         } => {
             let result = if let Some(b) = bucket {
-                if cloud == "backblaze" {
+                if let Some(p) = sequoiarecover::remote::get_provider(&cloud) {
+                    p.list_backup_blocking(&b, &backup, compression)
+                } else if cloud == "backblaze" {
                     match load_credentials(account_id, application_key, keyring) {
                         Ok((id, key)) => {
                             list_remote_backup_blocking(&id, &key, &b, &backup, compression)
@@ -446,7 +465,9 @@ fn main() {
             keyring,
         } => {
             let result = if let Some(b) = bucket {
-                if cloud == "backblaze" {
+                if let Some(p) = sequoiarecover::remote::get_provider(&cloud) {
+                    p.restore_backup_blocking(&b, &backup, &destination, compression)
+                } else if cloud == "backblaze" {
                     match load_credentials(account_id, application_key, keyring) {
                         Ok((id, key)) => restore_remote_backup_blocking(
                             &id,
