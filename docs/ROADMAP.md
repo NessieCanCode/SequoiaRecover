@@ -18,6 +18,7 @@ This document outlines key tasks for elevating SequoiaRecover to an industry-gra
 - [ ] Improve the GUI with progress indicators and error dialogs.
 - [ ] Package binaries for major platforms (deb/rpm, Homebrew, MSI).
 - [ ] Document typical workflows and troubleshooting in a user guide.
+- [ ] Generate compliance reports summarizing retention and encryption.
 
 ## Server Improvements
 - [ ] Add HTTPS support with configurable certificates.

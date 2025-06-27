@@ -2,6 +2,7 @@ use sequoiarecover::backup::{
     auto_select_compression, decrypt_file, encrypt_file, ensure_extension, list_backup,
     restore_backup, run_backup, BackupMode, CompressionType,
 };
+use sequoiarecover::compliance;
 use sequoiarecover::config::{
     config_file_path, derive_archive_key, encrypt_config, get_or_create_archive_salt,
     load_archive_salt, load_credentials, read_history, salt_file_path, show_history,
@@ -184,6 +185,11 @@ enum Commands {
         #[arg(long)]
         bucket: String,
     },
+    /// Compliance reporting commands
+    Compliance {
+        #[command(subcommand)]
+        command: ComplianceCommands,
+    },
     /// Initialize encrypted configuration
     Init {
         /// Store credentials in the OS keychain
@@ -196,6 +202,16 @@ enum Commands {
     Keyrotate,
     /// Generate the SequoiaRecover man page
     Manpage,
+}
+
+#[derive(Subcommand)]
+enum ComplianceCommands {
+    /// Produce compliance reports
+    Report {
+        /// Directory to write reports
+        #[arg(long, default_value = "./reports")]
+        output: String,
+    },
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -698,6 +714,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
         }
+        Commands::Compliance { command } => match command {
+            ComplianceCommands::Report { output } => {
+                if let Err(e) = compliance::generate_reports(&output) {
+                    eprintln!("{}", e);
+                }
+            }
+        },
         Commands::Init { keyring } => match config_file_path() {
             Ok(path) => {
                 let account_id =
