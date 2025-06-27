@@ -5344,6 +5344,7 @@ dependencies = [
  "futures",
  "keyring",
  "num_cpus",
+ "once_cell",
  "pbkdf2",
  "rand 0.8.5",
  "rfd",
