@@ -8,15 +8,20 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
     steps:
       - uses: actions/checkout@v4
       - uses: actions-rs/toolchain@v1
         with:
           toolchain: stable
           override: true
-      - name: Cargo fmt
+      - name: Rustfmt
         run: cargo fmt --check
+      - name: Clippy
+        run: cargo clippy -- -D warnings
       - name: Cargo check
         run: cargo check
       - name: Cargo test
