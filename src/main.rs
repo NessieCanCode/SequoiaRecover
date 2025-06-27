@@ -29,6 +29,12 @@ use std::time::Duration;
     about = "Backup tool for Linux command line."
 )]
 struct Cli {
+    /// Limit upload bandwidth in Mbps
+    #[arg(long)]
+    max_upload_mbps: Option<u64>,
+    /// Limit download bandwidth in Mbps
+    #[arg(long)]
+    max_download_mbps: Option<u64>,
     #[command(subcommand)]
     command: Commands,
 }
@@ -197,6 +203,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_env_filter(EnvFilter::from_default_env())
         .init();
     let cli = Cli::parse();
+    sequoiarecover::throttle::set_limits(cli.max_upload_mbps, cli.max_download_mbps);
     let _ = sequoiarecover::remote::load_providers_from_config();
     match cli.command {
         Commands::Backup {

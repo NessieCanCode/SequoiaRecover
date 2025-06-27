@@ -12,6 +12,7 @@ use sha2::{Digest, Sha256};
 use serde::{Deserialize, Serialize};
 
 use crate::backup::{list_backup, restore_backup, CompressionType};
+use crate::throttle;
 
 pub mod backblaze;
 pub mod aws;
@@ -33,6 +34,7 @@ pub trait StorageProvider: Send + Sync {
                 .file_name()
                 .unwrap_or_else(|| std::ffi::OsStr::new("backup.tmp")),
         );
+        throttle::check();
         self.download_blocking(bucket, backup, &tmp_path)?;
         let result = list_backup(tmp_path.to_str().unwrap(), compression);
         let _ = std::fs::remove_file(&tmp_path);
@@ -51,6 +53,7 @@ pub trait StorageProvider: Send + Sync {
                 .file_name()
                 .unwrap_or_else(|| std::ffi::OsStr::new("backup.tmp")),
         );
+        throttle::check();
         self.download_blocking(bucket, backup, &tmp_path)?;
         let result = restore_backup(tmp_path.to_str().unwrap(), destination, compression);
         let _ = std::fs::remove_file(&tmp_path);
@@ -231,6 +234,7 @@ pub fn upload_in_chunks(
     let mut file = File::open(file_path)?;
     let mut buf = vec![0u8; CHUNK_SIZE];
     for (i, hash) in manifest.hashes.iter().enumerate() {
+        throttle::check();
         file.seek(SeekFrom::Start((i as u64) * CHUNK_SIZE as u64))?;
         let n = file.read(&mut buf)?;
         if manifest.uploaded[i] || index.hashes.contains(hash) {
