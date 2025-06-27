@@ -13,6 +13,11 @@ use clap::ValueEnum;
 use flate2::read::GzDecoder;
 use flate2::write::GzEncoder;
 use flate2::Compression as GzCompression;
+use chacha20poly1305::{aead::{Aead, KeyInit}, ChaCha20Poly1305};
+use base64::{engine::general_purpose, Engine as _};
+use rand::rngs::OsRng;
+use rand::RngCore;
+use sha2::{Digest, Sha256};
 use num_cpus;
 use serde::{Deserialize, Serialize};
 use sysinfo::Networks;
@@ -452,5 +457,46 @@ pub fn restore_backup(
     let comp = compression.unwrap_or_else(|| guess_compression(path));
     let mut ar = open_archive(path, comp)?;
     ar.unpack(destination)?;
+    Ok(())
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct EncryptedArchive {
+    pub nonce: String,
+    pub ciphertext: String,
+    pub checksum: String,
+}
+
+pub fn encrypt_file(src: &str, dest: &str, key: &[u8; 32]) -> Result<(), Box<dyn Error>> {
+    let cipher = ChaCha20Poly1305::new(key.into());
+    let mut nonce_bytes = [0u8; 12];
+    OsRng.fill_bytes(&mut nonce_bytes);
+    let nonce = nonce_bytes.as_slice().try_into().expect("nonce len");
+    let data = std::fs::read(src)?;
+    let checksum = Sha256::digest(&data);
+    let ct = cipher.encrypt(nonce, data.as_ref())?;
+    let enc = EncryptedArchive {
+        nonce: general_purpose::STANDARD.encode(nonce_bytes),
+        ciphertext: general_purpose::STANDARD.encode(ct),
+        checksum: format!("{:x}", checksum),
+    };
+    let f = File::create(dest)?;
+    serde_json::to_writer_pretty(f, &enc)?;
+    Ok(())
+}
+
+pub fn decrypt_file(src: &str, dest: &str, key: &[u8; 32]) -> Result<(), Box<dyn Error>> {
+    let f = File::open(src)?;
+    let enc: EncryptedArchive = serde_json::from_reader(f)?;
+    let nonce_bytes = general_purpose::STANDARD.decode(enc.nonce)?;
+    let ct = general_purpose::STANDARD.decode(enc.ciphertext)?;
+    let cipher = ChaCha20Poly1305::new(key.into());
+    let nonce = nonce_bytes.as_slice().try_into().expect("nonce len");
+    let data = cipher.decrypt(nonce, ct.as_ref())?;
+    let check = format!("{:x}", Sha256::digest(&data));
+    if check != enc.checksum {
+        return Err("Checksum mismatch".into());
+    }
+    std::fs::write(dest, &data)?;
     Ok(())
 }

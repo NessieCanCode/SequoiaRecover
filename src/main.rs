@@ -1,14 +1,15 @@
 use sequoiarecover::backup::{
-    auto_select_compression, ensure_extension, list_backup, restore_backup, run_backup, BackupMode,
-    CompressionType,
+    auto_select_compression, decrypt_file, encrypt_file, ensure_extension, list_backup,
+    restore_backup, run_backup, BackupMode, CompressionType,
 };
 use sequoiarecover::config::{
-    config_file_path, encrypt_config, load_credentials, show_history, store_credentials_keyring,
+    config_file_path, derive_archive_key, encrypt_config, get_or_create_archive_salt,
+    load_archive_salt, load_credentials, salt_file_path, show_history, store_credentials_keyring,
     Config,
 };
 use sequoiarecover::remote::{
+    download_from_azure_blocking, download_from_backblaze_blocking, download_from_s3_blocking,
     list_azure_backup_blocking, list_remote_backup_blocking, list_s3_backup_blocking,
-    restore_azure_backup_blocking, restore_remote_backup_blocking, restore_s3_backup_blocking,
     show_azure_history_blocking, show_remote_history_blocking, show_s3_history_blocking,
     upload_to_azure_blocking, upload_to_backblaze_blocking, upload_to_s3_blocking,
 };
@@ -18,6 +19,8 @@ use clap::{CommandFactory, Parser, Subcommand};
 use clap_mangen::Man;
 use std::thread::sleep;
 use std::time::Duration;
+use rand::rngs::OsRng;
+use rand::RngCore;
 
 #[derive(Parser)]
 #[command(
@@ -168,11 +171,15 @@ enum Commands {
         #[arg(long, default_value_t = false)]
         keyring: bool,
     },
+    /// Generate encryption key used for archive encryption
+    Keygen,
+    /// Rotate to a new encryption key
+    Keyrotate,
     /// Generate the SequoiaRecover man page
     Manpage,
 }
 
-fn main() {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::from_default_env())
         .init();
@@ -207,8 +214,23 @@ fn main() {
                 eprintln!("Backup failed: {}", e);
             } else {
                 println!("Backup written to {}", output_path);
+                let enc_path = format!("{}.enc", output_path);
+                if let Ok((id, key)) = load_credentials(account_id.clone(), application_key.clone(), keyring) {
+                    match get_or_create_archive_salt() {
+                        Ok(salt) => {
+                            let k = derive_archive_key(&id, &key, &salt);
+                            if let Err(e) = encrypt_file(&output_path, &enc_path, &k) {
+                                eprintln!("Encryption failed: {}", e);
+                                return Err(e);
+                            }
+                            let _ = std::fs::remove_file(&output_path);
+                        }
+                        Err(e) => eprintln!("{}", e),
+                    }
+                }
+                let target = &enc_path;
                 if let Some(p) = sequoiarecover::remote::get_provider(&cloud) {
-                    if let Err(e) = p.upload_blocking(&bucket, &output_path) {
+                    if let Err(e) = p.upload_blocking(&bucket, target) {
                         eprintln!("Upload failed: {}", e);
                     } else {
                         println!("Uploaded to {} bucket {}", cloud, bucket);
@@ -216,9 +238,7 @@ fn main() {
                 } else if cloud == "backblaze" {
                     match load_credentials(account_id, application_key, keyring) {
                         Ok((id, key)) => {
-                            if let Err(e) =
-                                upload_to_backblaze_blocking(&id, &key, &bucket, &output_path)
-                            {
+                            if let Err(e) = upload_to_backblaze_blocking(&id, &key, &bucket, target) {
                                 eprintln!("Upload failed: {}", e);
                             } else {
                                 println!("Uploaded to Backblaze bucket {}", bucket);
@@ -232,9 +252,7 @@ fn main() {
                         std::env::var("AWS_SECRET_ACCESS_KEY"),
                         std::env::var("AWS_REGION"),
                     ) {
-                        if let Err(e) =
-                            upload_to_s3_blocking(&ak, &sk, &region, &bucket, &output_path)
-                        {
+                        if let Err(e) = upload_to_s3_blocking(&ak, &sk, &region, &bucket, target) {
                             eprintln!("Upload failed: {}", e);
                         } else {
                             println!("Uploaded to S3 bucket {}", bucket);
@@ -247,8 +265,7 @@ fn main() {
                         std::env::var("AZURE_STORAGE_ACCOUNT"),
                         std::env::var("AZURE_STORAGE_KEY"),
                     ) {
-                        if let Err(e) = upload_to_azure_blocking(&acct, &key, &bucket, &output_path)
-                        {
+                        if let Err(e) = upload_to_azure_blocking(&acct, &key, &bucket, target) {
                             eprintln!("Upload failed: {}", e);
                         } else {
                             println!("Uploaded to Azure container {}", bucket);
@@ -465,18 +482,12 @@ fn main() {
             keyring,
         } => {
             let result = if let Some(b) = bucket {
-                if let Some(p) = sequoiarecover::remote::get_provider(&cloud) {
-                    p.restore_backup_blocking(&b, &backup, &destination, compression)
+                let tmp_enc = std::env::temp_dir().join("backup.enc");
+                let download_res: Result<(), Box<dyn std::error::Error>> = if let Some(p) = sequoiarecover::remote::get_provider(&cloud) {
+                    p.download_blocking(&b, &backup, &tmp_enc)
                 } else if cloud == "backblaze" {
-                    match load_credentials(account_id, application_key, keyring) {
-                        Ok((id, key)) => restore_remote_backup_blocking(
-                            &id,
-                            &key,
-                            &b,
-                            &backup,
-                            &destination,
-                            compression,
-                        ),
+                    match load_credentials(account_id.clone(), application_key.clone(), keyring) {
+                        Ok((id, key)) => download_from_backblaze_blocking(&id, &key, &b, &backup, &tmp_enc),
                         Err(e) => Err(e),
                     }
                 } else if cloud == "aws" {
@@ -485,15 +496,7 @@ fn main() {
                         std::env::var("AWS_SECRET_ACCESS_KEY"),
                         std::env::var("AWS_REGION"),
                     ) {
-                        restore_s3_backup_blocking(
-                            &ak,
-                            &sk,
-                            &region,
-                            &b,
-                            &backup,
-                            &destination,
-                            compression,
-                        )
+                        download_from_s3_blocking(&ak, &sk, &region, &b, &backup, &tmp_enc)
                     } else {
                         Err("Missing AWS credentials".into())
                     }
@@ -502,19 +505,36 @@ fn main() {
                         std::env::var("AZURE_STORAGE_ACCOUNT"),
                         std::env::var("AZURE_STORAGE_KEY"),
                     ) {
-                        restore_azure_backup_blocking(
-                            &acct,
-                            &key,
-                            &b,
-                            &backup,
-                            &destination,
-                            compression,
-                        )
+                        download_from_azure_blocking(&acct, &key, &b, &backup, &tmp_enc)
                     } else {
                         Err("Missing Azure credentials".into())
                     }
                 } else {
                     Err("Unsupported cloud".into())
+                };
+                match download_res {
+                    Ok(()) => {
+                        let salt = match load_archive_salt() {
+                            Ok(s) => s,
+                            Err(e) => return Err(e),
+                        };
+                        let (id, key) = match load_credentials(account_id, application_key, keyring) {
+                            Ok(creds) => creds,
+                            Err(e) => return Err(e),
+                        };
+                        let k = derive_archive_key(&id, &key, &salt);
+                        let tmp_plain = tmp_enc.with_extension("tar");
+                        let dec_res = decrypt_file(tmp_enc.to_str().unwrap(), tmp_plain.to_str().unwrap(), &k);
+                        let res = if dec_res.is_ok() {
+                            restore_backup(tmp_plain.to_str().unwrap(), &destination, compression)
+                        } else {
+                            Err("Decryption failed".into())
+                        };
+                        let _ = std::fs::remove_file(&tmp_enc);
+                        let _ = std::fs::remove_file(&tmp_plain);
+                        res
+                    }
+                    Err(e) => Err(e),
                 }
             } else {
                 restore_backup(&backup, &destination, compression)
@@ -541,7 +561,7 @@ fn main() {
                         rpassword::prompt_password("Confirm password: ").unwrap_or_default();
                     if password != confirm {
                         eprintln!("Passwords do not match");
-                        return;
+                        return Ok(());
                     }
                     let cfg = Config {
                         account_id,
@@ -568,6 +588,23 @@ fn main() {
             }
             Err(e) => eprintln!("{}", e),
         },
+        Commands::Keygen => match get_or_create_archive_salt() {
+            Ok(_) => println!("Encryption key generated"),
+            Err(e) => eprintln!("{}", e),
+        },
+        Commands::Keyrotate => match get_or_create_archive_salt() {
+            Ok(_) => {
+                let path = salt_file_path().unwrap();
+                let mut salt = [0u8; 16];
+                OsRng.fill_bytes(&mut salt);
+                if let Err(e) = std::fs::write(path, &salt) {
+                    eprintln!("Failed to rotate key: {}", e);
+                } else {
+                    println!("Encryption key rotated");
+                }
+            }
+            Err(e) => eprintln!("{}", e),
+        },
         Commands::Manpage => {
             let cmd = Cli::command();
             let man = Man::new(cmd);
@@ -576,4 +613,5 @@ fn main() {
             }
         }
     }
+    Ok(())
 }

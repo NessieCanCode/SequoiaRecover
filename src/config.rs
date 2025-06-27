@@ -20,6 +20,7 @@ use crate::backup::{BackupMode, CompressionType};
 
 pub const CONFIG_PATH: &str = ".sequoiarecover/config.enc";
 pub const HISTORY_PATH: &str = ".sequoiarecover/history.json";
+pub const SALT_PATH: &str = ".sequoiarecover/archive_salt";
 pub const KEYRING_SERVICE: &str = "sequoiarecover";
 
 #[derive(Serialize, Deserialize)]
@@ -51,6 +52,45 @@ pub fn config_file_path() -> Result<PathBuf, Box<dyn Error>> {
 pub fn history_file_path() -> Result<PathBuf, Box<dyn Error>> {
     let home = std::env::var("HOME").or_else(|_| std::env::var("USERPROFILE"))?;
     Ok(PathBuf::from(home).join(HISTORY_PATH))
+}
+
+pub fn salt_file_path() -> Result<PathBuf, Box<dyn Error>> {
+    let home = std::env::var("HOME").or_else(|_| std::env::var("USERPROFILE"))?;
+    Ok(PathBuf::from(home).join(SALT_PATH))
+}
+
+pub fn get_or_create_archive_salt() -> Result<Vec<u8>, Box<dyn Error>> {
+    let path = salt_file_path()?;
+    if path.exists() {
+        let data = std::fs::read(&path)?;
+        return Ok(data);
+    }
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let mut salt = [0u8; 16];
+    OsRng.fill_bytes(&mut salt);
+    std::fs::write(&path, &salt)?;
+    Ok(salt.to_vec())
+}
+
+pub fn load_archive_salt() -> Result<Vec<u8>, Box<dyn Error>> {
+    let path = salt_file_path()?;
+    if !path.exists() {
+        return Err("Encryption key missing. Generate it with 'keygen'".into());
+    }
+    Ok(std::fs::read(path)?)
+}
+
+pub fn derive_archive_key(
+    account_id: &str,
+    application_key: &str,
+    salt: &[u8],
+) -> [u8; 32] {
+    let mut key = [0u8; 32];
+    let password = format!("{}:{}", account_id, application_key);
+    pbkdf2_hmac::<Sha256>(password.as_bytes(), salt, 200_000, &mut key);
+    key
 }
 
 pub fn encrypt_config(config: &Config, password: &str) -> Result<EncryptedConfig, Box<dyn Error>> {
