@@ -15,7 +15,6 @@
 - Automated backup scheduling
 - Easy-to-use command-line interface (CLI) with plans for a GUI
 - Basic cross-platform GUI built using [egui](https://github.com/emilk/egui)
-- Optional local backup server for on-premise storage
 - Focus on disaster recovery and business continuity
 - View past backup history
 - Inspect backup contents without extracting
@@ -78,15 +77,6 @@ Restore a backup directly from Backblaze:
 ```bash
 sequoiarecover restore --backup backup.tar --bucket my-bucket --destination /restore/path
 ```
-Run a local backup server to store archives on your own machine:
-```bash
-sequoiarecover serve --address 0.0.0.0:3030 --dir /path/to/storage
-```
-Upload to the server instead of Backblaze:
-```bash
-sequoiarecover backup --source /data --bucket my-bucket \
-    --cloud server --server_url http://localhost:3030
-```
 Check available commands and options:
 ```bash
 sequoiarecover --help
@@ -123,7 +113,7 @@ The GUI provides a multi-tab interface for running backups, restoring archives,
 browsing history and initializing credentials. Compression and backup mode
 selections are persisted between sessions alongside the most recent paths.
 While a backup runs a progress bar is displayed. The Backup tab now lets you
-upload directly to Backblaze, AWS, Azure or a custom server by choosing the
+upload directly to Backblaze, AWS or Azure by choosing the
 desired destination.
 
 ### Backblaze Authentication
@@ -144,7 +134,6 @@ You'll be prompted for the account ID and application key. When using the `--key
 
 AWS and Azure credentials are read from the environment. Set `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` and `AWS_REGION` when using `--cloud aws`. For Azure Blob Storage set `AZURE_STORAGE_ACCOUNT` and `AZURE_STORAGE_KEY` when using `--cloud azure`.
 
-For instructions on using the local server feature see [docs/server.md](docs/server.md).
 
 ### Logging
 
@@ -181,8 +170,6 @@ The commands below illustrate a common backup cycle.
        --destination /restore/path
    ```
 
-For additional commands and server usage details, run `man sequoiarecover` and
-see [docs/server.md](docs/server.md).
 
 ## Troubleshooting
 

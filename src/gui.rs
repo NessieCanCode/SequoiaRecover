@@ -11,7 +11,6 @@ use sequoiarecover::config::{
 use sequoiarecover::remote::{
     restore_azure_backup_blocking, restore_remote_backup_blocking, restore_s3_backup_blocking,
 };
-use sequoiarecover::server_client::{restore_server_backup_blocking, upload_to_server_blocking};
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
 use tracing::info;
@@ -38,8 +37,6 @@ struct GuiConfig {
     #[serde(default)]
     bucket: String,
     #[serde(default)]
-    server_url: String,
-    #[serde(default)]
     log_level: LogLevel,
 }
 
@@ -50,7 +47,6 @@ enum RestoreMethod {
     Backblaze,
     Aws,
     Azure,
-    Server,
 }
 
 #[derive(Serialize, Deserialize, PartialEq, Clone, Debug, Default)]
@@ -60,7 +56,6 @@ enum BackupDestination {
     Backblaze,
     Aws,
     Azure,
-    Server,
 }
 
 #[derive(Serialize, Deserialize, PartialEq, Clone, Debug)]
@@ -96,7 +91,6 @@ struct App {
     restore_path: String,
     restore_dest: String,
     bucket: String,
-    server_url: String,
     history: Vec<HistoryEntry>,
     status: Arc<Mutex<String>>,
     progress: Arc<Mutex<f32>>,
@@ -275,20 +269,11 @@ impl eframe::App for App {
                             BackupDestination::Azure,
                             "Azure",
                         );
-                        ui.selectable_value(
-                            &mut self.destination,
-                            BackupDestination::Server,
-                            "Server",
-                        );
                     });
-                if self.destination == BackupDestination::Server {
+                if matches!(self.destination, BackupDestination::Backblaze | BackupDestination::Aws | BackupDestination::Azure) {
                     ui.horizontal(|ui| {
                         ui.label("Bucket:");
                         ui.text_edit_singleline(&mut self.bucket);
-                    });
-                    ui.horizontal(|ui| {
-                        ui.label("Server URL:");
-                        ui.text_edit_singleline(&mut self.server_url);
                     });
                 }
                 if ui.button("Run Backup").clicked() {
@@ -298,7 +283,6 @@ impl eframe::App for App {
                     let mode = self.mode;
                     let destination = self.destination.clone();
                     let bucket = self.bucket.clone();
-                    let server_url = self.server_url.clone();
                     let status = self.status.clone();
                     let progress = self.progress.clone();
                     let out_path = ensure_extension(&output, compression);
@@ -316,13 +300,14 @@ impl eframe::App for App {
                                 }
                             },
                         );
-                        if res.is_ok() && matches!(destination, BackupDestination::Server) {
-                            if let Err(e) =
-                                upload_to_server_blocking(&server_url, &bucket, &out_path)
-                            {
-                                let mut s = status.lock().unwrap();
-                                *s = format!("Upload failed: {}", e);
-                                return;
+                        if res.is_ok() {
+                            match destination {
+                                BackupDestination::Backblaze => {
+                                    // upload handled by CLI
+                                }
+                                BackupDestination::Aws => {}
+                                BackupDestination::Azure => {}
+                                BackupDestination::Local => {}
                             }
                         }
                         let mut s = status.lock().unwrap();
@@ -342,7 +327,6 @@ impl eframe::App for App {
                         destination: self.destination.clone(),
                         restore_method: self.restore_method.clone(),
                         bucket: self.bucket.clone(),
-                        server_url: self.server_url.clone(),
                         log_level: self.log_level.clone(),
                     });
                     self.history = load_history();
@@ -380,11 +364,6 @@ impl eframe::App for App {
                             RestoreMethod::Azure,
                             "Azure",
                         );
-                        ui.selectable_value(
-                            &mut self.restore_method,
-                            RestoreMethod::Server,
-                            "Server",
-                        );
                     });
                 match self.restore_method {
                     RestoreMethod::Local => {
@@ -401,17 +380,11 @@ impl eframe::App for App {
                     RestoreMethod::Backblaze
                     | RestoreMethod::Aws
                     | RestoreMethod::Azure
-                    | RestoreMethod::Server => {
+                    => {
                         ui.horizontal(|ui| {
                             ui.label("Bucket:");
                             ui.text_edit_singleline(&mut self.bucket);
                         });
-                        if self.restore_method == RestoreMethod::Server {
-                            ui.horizontal(|ui| {
-                                ui.label("Server URL:");
-                                ui.text_edit_singleline(&mut self.server_url);
-                            });
-                        }
                         ui.horizontal(|ui| {
                             ui.label("Backup name:");
                             ui.text_edit_singleline(&mut self.restore_path);
@@ -432,7 +405,6 @@ impl eframe::App for App {
                     let dst = self.restore_dest.clone();
                     let bucket = self.bucket.clone();
                     let method = self.restore_method.clone();
-                    let server_url = self.server_url.clone();
                     let account_id = self.account_id.clone();
                     let application_key = self.application_key.clone();
                     let status = self.status.clone();
@@ -473,13 +445,6 @@ impl eframe::App for App {
                                     Err("Missing Azure credentials".into())
                                 }
                             }
-                            RestoreMethod::Server => restore_server_backup_blocking(
-                                &server_url,
-                                &bucket,
-                                &src,
-                                &dst,
-                                None,
-                            ),
                         };
                         let mut s = status.lock().unwrap();
                         *s = match res {
@@ -498,7 +463,6 @@ impl eframe::App for App {
                         destination: self.destination.clone(),
                         restore_method: self.restore_method.clone(),
                         bucket: self.bucket.clone(),
-                        server_url: self.server_url.clone(),
                         log_level: self.log_level.clone(),
                     });
                 }
@@ -636,7 +600,6 @@ impl eframe::App for App {
                         destination: self.destination.clone(),
                         restore_method: self.restore_method.clone(),
                         bucket: self.bucket.clone(),
-                        server_url: self.server_url.clone(),
                         log_level: self.log_level.clone(),
                     });
                     setup_logging(self.logs.clone(), self.log_level.clone());
@@ -665,7 +628,6 @@ fn main() -> Result<(), eframe::Error> {
                 restore_path: cfg.restore_path,
                 restore_dest: cfg.restore_dest,
                 bucket: cfg.bucket,
-                server_url: cfg.server_url,
                 history: load_history(),
                 status: Arc::new(Mutex::new(String::new())),
                 progress: Arc::new(Mutex::new(0.0)),

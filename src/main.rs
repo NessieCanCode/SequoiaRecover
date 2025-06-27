@@ -12,11 +12,6 @@ use sequoiarecover::remote::{
     show_azure_history_blocking, show_remote_history_blocking, show_s3_history_blocking,
     upload_to_azure_blocking, upload_to_backblaze_blocking, upload_to_s3_blocking,
 };
-use sequoiarecover::server::run_server;
-use sequoiarecover::server_client::{
-    list_server_backup_blocking, restore_server_backup_blocking, show_server_history_blocking,
-    upload_to_server_blocking,
-};
 use tracing_subscriber::EnvFilter;
 
 use clap::{CommandFactory, Parser, Subcommand};
@@ -66,9 +61,6 @@ enum Commands {
         /// Store credentials in OS keychain
         #[arg(long, default_value_t = false)]
         keyring: bool,
-        /// URL of the backup server when using the server cloud option
-        #[arg(long)]
-        server_url: Option<String>,
         /// Override detected link speed in Mbps when using auto compression
         #[arg(long)]
         compression_threshold: Option<u64>,
@@ -102,9 +94,6 @@ enum Commands {
         /// Retrieve credentials from the keychain
         #[arg(long, default_value_t = false)]
         keyring: bool,
-        /// URL of the backup server when using the server cloud option
-        #[arg(long)]
-        server_url: Option<String>,
         /// Override detected link speed in Mbps when using auto compression
         #[arg(long)]
         compression_threshold: Option<u64>,
@@ -128,9 +117,6 @@ enum Commands {
         /// Retrieve credentials from keychain
         #[arg(long, default_value_t = false)]
         keyring: bool,
-        /// URL of the backup server when using the server cloud option
-        #[arg(long)]
-        server_url: Option<String>,
         /// Delete backups older than this many days
         #[arg(long)]
         retain_days: Option<u64>,
@@ -155,9 +141,6 @@ enum Commands {
         /// Retrieve credentials from keychain
         #[arg(long, default_value_t = false)]
         keyring: bool,
-        /// URL of the backup server when using the server cloud option
-        #[arg(long)]
-        server_url: Option<String>,
     },
     /// Restore files from a backup archive
     Restore {
@@ -178,27 +161,6 @@ enum Commands {
         /// Retrieve credentials from keychain
         #[arg(long, default_value_t = false)]
         keyring: bool,
-        /// URL of the backup server when using the server cloud option
-        #[arg(long)]
-        server_url: Option<String>,
-    },
-    /// Run a local backup server
-    Serve {
-        /// Address to listen on, e.g. 0.0.0.0:3030
-        #[arg(long, default_value = "127.0.0.1:3030")]
-        address: String,
-        /// Directory to store uploaded backups
-        #[arg(long, default_value = "storage")]
-        dir: String,
-        /// Path to TLS certificate
-        #[arg(long)]
-        cert: Option<String>,
-        /// Path to TLS private key
-        #[arg(long)]
-        key: Option<String>,
-        /// Authorization token required on requests
-        #[arg(long)]
-        auth_token: Option<String>,
     },
     /// Initialize encrypted configuration
     Init {
@@ -226,7 +188,6 @@ fn main() {
             account_id,
             application_key,
             keyring,
-            server_url,
             compression_threshold,
         } => {
             let actual_compression = if compression == CompressionType::Auto {
@@ -288,17 +249,6 @@ fn main() {
                     } else {
                         eprintln!("Missing Azure credentials");
                     }
-                } else if cloud == "server" {
-                    let url = server_url.or_else(|| std::env::var("SERVER_URL").ok());
-                    if let Some(u) = url {
-                        if let Err(e) = upload_to_server_blocking(&u, &bucket, &output_path) {
-                            eprintln!("Upload failed: {}", e);
-                        } else {
-                            println!("Uploaded to server {}", u);
-                        }
-                    } else {
-                        eprintln!("Missing server_url");
-                    }
                 }
             }
         }
@@ -311,7 +261,6 @@ fn main() {
             account_id,
             application_key,
             keyring,
-            server_url,
             compression_threshold,
             interval,
             max_runs,
@@ -384,19 +333,6 @@ fn main() {
                         } else {
                             eprintln!("Missing Azure credentials");
                         }
-                    } else if cloud == "server" {
-                        let url = server_url
-                            .clone()
-                            .or_else(|| std::env::var("SERVER_URL").ok());
-                        if let Some(u) = url {
-                            if let Err(e) = upload_to_server_blocking(&u, &bucket, &output_path) {
-                                eprintln!("Upload failed: {}", e);
-                            } else {
-                                println!("Uploaded to server {}", u);
-                            }
-                        } else {
-                            eprintln!("Missing server_url");
-                        }
                     }
                 }
                 run_count += 1;
@@ -409,7 +345,6 @@ fn main() {
             account_id,
             application_key,
             keyring,
-            server_url,
             retain_days,
             retain_weeks,
         } => {
@@ -449,15 +384,6 @@ fn main() {
                     } else {
                         eprintln!("Missing Azure credentials");
                     }
-                } else if cloud == "server" {
-                    let url = server_url.or_else(|| std::env::var("SERVER_URL").ok());
-                    if let Some(u) = url {
-                        if let Err(e) = show_server_history_blocking(&u, &b) {
-                            eprintln!("{}", e);
-                        }
-                    } else {
-                        eprintln!("Missing server_url");
-                    }
                 }
             } else if let Err(e) = show_history() {
                 eprintln!("{}", e);
@@ -471,7 +397,6 @@ fn main() {
             account_id,
             application_key,
             keyring,
-            server_url,
         } => {
             let result = if let Some(b) = bucket {
                 if cloud == "backblaze" {
@@ -500,13 +425,6 @@ fn main() {
                     } else {
                         Err("Missing Azure credentials".into())
                     }
-                } else if cloud == "server" {
-                    let url = server_url.or_else(|| std::env::var("SERVER_URL").ok());
-                    if let Some(u) = url {
-                        list_server_backup_blocking(&u, &b, &backup, compression)
-                    } else {
-                        Err("Missing server_url".into())
-                    }
                 } else {
                     Err("Unsupported cloud".into())
                 }
@@ -526,7 +444,6 @@ fn main() {
             account_id,
             application_key,
             keyring,
-            server_url,
         } => {
             let result = if let Some(b) = bucket {
                 if cloud == "backblaze" {
@@ -575,13 +492,6 @@ fn main() {
                     } else {
                         Err("Missing Azure credentials".into())
                     }
-                } else if cloud == "server" {
-                    let url = server_url.or_else(|| std::env::var("SERVER_URL").ok());
-                    if let Some(u) = url {
-                        restore_server_backup_blocking(&u, &b, &backup, &destination, compression)
-                    } else {
-                        Err("Missing server_url".into())
-                    }
                 } else {
                     Err("Unsupported cloud".into())
                 }
@@ -589,31 +499,6 @@ fn main() {
                 restore_backup(&backup, &destination, compression)
             };
             if let Err(e) = result {
-                eprintln!("{}", e);
-            }
-        }
-        Commands::Serve {
-            address,
-            dir,
-            cert,
-            key,
-            auth_token,
-        } => {
-            let addr: std::net::SocketAddr = match address.parse() {
-                Ok(a) => a,
-                Err(e) => {
-                    eprintln!("Invalid address: {}", e);
-                    return;
-                }
-            };
-            let rt = tokio::runtime::Runtime::new().expect("runtime");
-            if let Err(e) = rt.block_on(run_server(
-                addr,
-                dir.into(),
-                cert.map(Into::into),
-                key.map(Into::into),
-                auth_token,
-            )) {
                 eprintln!("{}", e);
             }
         }

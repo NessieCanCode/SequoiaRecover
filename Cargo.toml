@@ -38,9 +38,6 @@ base64 = "0.21"
 chrono = { version = "0.4", features = ["serde"] }
 sysinfo = "0.35"
 eframe = "0.31"
-warp = { version = "0.3", features = ["tls"] }
-reqwest = { version = "0.11", features = ["blocking", "json"] }
-bytes = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
 keyring = "2"
@@ -51,7 +48,6 @@ aws-sdk-s3 = "1"
 azure_storage = "0.13"
 azure_storage_blobs = "0.13"
 futures = "0.3"
-percent-encoding = "2"
 
 
 [dev-dependencies]
