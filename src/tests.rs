@@ -249,9 +249,93 @@ async fn test_upload_to_server_blocking_large_file() -> Result<(), Box<dyn std::
     .await??;
 
     srv_handle.abort();
+    let _ = srv_handle.await;
 
     let stored = storage_dir.join("bucket").join("data.bin");
     assert!(stored.exists());
     assert_eq!(std::fs::metadata(stored)?.len(), 5 * 1024 * 1024);
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_run_server_upload_download_and_list() -> Result<(), Box<dyn std::error::Error>> {
+    use crate::server::{run_server, FileInfo};
+    use crate::server_client::download_from_server_blocking;
+    use reqwest::blocking::Client;
+    use std::net::TcpListener;
+    use tokio::task;
+    use tokio::time::{sleep, Duration};
+
+    let dir = tempdir()?;
+    let storage_dir = dir.path().join("storage");
+
+    let listener = TcpListener::bind(("127.0.0.1", 0))?;
+    let addr = listener.local_addr()?;
+    drop(listener);
+
+    let server_url = format!("http://{}", addr);
+    let srv_handle = task::spawn(async move {
+        run_server(addr, storage_dir.clone(), None, None, None)
+            .await
+            .unwrap();
+    });
+
+    let start = std::time::Instant::now();
+    loop {
+        if std::net::TcpStream::connect(addr).is_ok() {
+            break;
+        }
+        if start.elapsed() > Duration::from_secs(5) {
+            srv_handle.abort();
+            panic!("server did not start");
+        }
+        sleep(Duration::from_millis(50)).await;
+    }
+
+    let src_file = dir.path().join("data.txt");
+    fs::write(&src_file, b"hello server")?;
+    task::spawn_blocking({
+        let server_url = server_url.clone();
+        let src_file = src_file.clone();
+        move || {
+            upload_to_server_blocking(&server_url, "bucket", src_file.to_str().unwrap())
+                .map_err(|e| e.to_string())
+        }
+    })
+    .await??;
+
+    let dest = dir.path().join("out.txt");
+    task::spawn_blocking({
+        let server_url = server_url.clone();
+        let dest = dest.clone();
+        move || {
+            download_from_server_blocking(&server_url, "bucket", "data.txt", &dest)
+                .map_err(|e| e.to_string())
+        }
+    })
+    .await??;
+
+    let content = fs::read_to_string(&dest)?;
+    assert_eq!(content, "hello server");
+
+    let entries: Vec<FileInfo> = task::spawn_blocking({
+        let server_url = server_url.clone();
+        move || {
+            let client = Client::new();
+            let resp = client
+                .get(format!("{}/list/bucket", server_url))
+                .send()
+                .map_err(|e| e.to_string())?;
+            if !resp.status().is_success() {
+                return Err(format!("bad status: {}", resp.status()));
+            }
+            resp.json().map_err(|e| e.to_string())
+        }
+    })
+    .await??;
+    assert!(entries.iter().any(|e| e.name == "data.txt"));
+
+    srv_handle.abort();
+    let _ = srv_handle.await;
     Ok(())
 }
