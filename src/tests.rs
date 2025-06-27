@@ -164,7 +164,7 @@ fn test_auto_select_compression_override() {
 #[tokio::test]
 async fn test_server_rejects_malicious_paths() {
     let dir = tempdir().unwrap();
-    let filter = make_routes(dir.path().into()).recover(handle_rejection);
+    let filter = make_routes(dir.path().into(), None).recover(handle_rejection);
 
     let resp = warp_request()
         .method("POST")
@@ -202,7 +202,7 @@ async fn test_server_stream_upload() {
     use tokio::io::AsyncReadExt;
 
     let dir = tempdir().unwrap();
-    let filter = make_routes(dir.path().into()).recover(handle_rejection);
+    let filter = make_routes(dir.path().into(), None).recover(handle_rejection);
 
     let data = vec![0u8; 5 * 1024 * 1024];
     let resp = warp_request()
@@ -228,7 +228,7 @@ async fn test_upload_to_server_blocking_large_file() -> Result<(), Box<dyn std::
 
     let dir = tempdir()?;
     let storage_dir = dir.path().join("storage");
-    let filter = make_routes(storage_dir.clone()).recover(handle_rejection);
+    let filter = make_routes(storage_dir.clone(), None).recover(handle_rejection);
     let (addr, server) = warp::serve(filter).bind_ephemeral(([127, 0, 0, 1], 0));
     let srv_handle = task::spawn(server);
 

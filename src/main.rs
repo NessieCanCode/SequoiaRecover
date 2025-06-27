@@ -190,6 +190,15 @@ enum Commands {
         /// Directory to store uploaded backups
         #[arg(long, default_value = "storage")]
         dir: String,
+        /// Path to TLS certificate
+        #[arg(long)]
+        cert: Option<String>,
+        /// Path to TLS private key
+        #[arg(long)]
+        key: Option<String>,
+        /// Authorization token required on requests
+        #[arg(long)]
+        auth_token: Option<String>,
     },
     /// Initialize encrypted configuration
     Init {
@@ -558,7 +567,13 @@ fn main() {
                 eprintln!("{}", e);
             }
         }
-        Commands::Serve { address, dir } => {
+        Commands::Serve {
+            address,
+            dir,
+            cert,
+            key,
+            auth_token,
+        } => {
             let addr: std::net::SocketAddr = match address.parse() {
                 Ok(a) => a,
                 Err(e) => {
@@ -567,7 +582,13 @@ fn main() {
                 }
             };
             let rt = tokio::runtime::Runtime::new().expect("runtime");
-            if let Err(e) = rt.block_on(run_server(addr, dir.into())) {
+            if let Err(e) = rt.block_on(run_server(
+                addr,
+                dir.into(),
+                cert.map(Into::into),
+                key.map(Into::into),
+                auth_token,
+            )) {
                 eprintln!("{}", e);
             }
         }
