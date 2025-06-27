@@ -1,16 +1,16 @@
 use sequoiarecover::backup::{
-    auto_select_compression, list_backup, restore_backup, run_backup, BackupMode, CompressionType,
+    auto_select_compression, ensure_extension, list_backup, restore_backup, run_backup, BackupMode,
+    CompressionType,
 };
 use sequoiarecover::config::{
-    config_file_path, encrypt_config, load_credentials, show_history,
-    store_credentials_keyring, Config,
+    config_file_path, encrypt_config, load_credentials, show_history, store_credentials_keyring,
+    Config,
 };
 use sequoiarecover::remote::{
-    list_remote_backup_blocking, restore_remote_backup_blocking, show_remote_history_blocking,
-    upload_to_backblaze_blocking, upload_to_s3_blocking,
-    show_s3_history_blocking, list_s3_backup_blocking, restore_s3_backup_blocking,
-    upload_to_azure_blocking, show_azure_history_blocking,
-    list_azure_backup_blocking, restore_azure_backup_blocking,
+    list_azure_backup_blocking, list_remote_backup_blocking, list_s3_backup_blocking,
+    restore_azure_backup_blocking, restore_remote_backup_blocking, restore_s3_backup_blocking,
+    show_azure_history_blocking, show_remote_history_blocking, show_s3_history_blocking,
+    upload_to_azure_blocking, upload_to_backblaze_blocking, upload_to_s3_blocking,
 };
 use sequoiarecover::server::run_server;
 use sequoiarecover::server_client::{
@@ -236,19 +236,20 @@ fn main() {
             } else {
                 compression
             };
+            let output_path = ensure_extension(&output, actual_compression);
             println!(
                 "Starting backup from {} to {} bucket {} using {:?}",
                 source, cloud, bucket, actual_compression
             );
-            if let Err(e) = run_backup(&source, &output, actual_compression, mode) {
+            if let Err(e) = run_backup(&source, &output_path, actual_compression, mode) {
                 eprintln!("Backup failed: {}", e);
             } else {
-                println!("Backup written to {}", output);
+                println!("Backup written to {}", output_path);
                 if cloud == "backblaze" {
                     match load_credentials(account_id, application_key, keyring) {
                         Ok((id, key)) => {
                             if let Err(e) =
-                                upload_to_backblaze_blocking(&id, &key, &bucket, &output)
+                                upload_to_backblaze_blocking(&id, &key, &bucket, &output_path)
                             {
                                 eprintln!("Upload failed: {}", e);
                             } else {
@@ -263,7 +264,9 @@ fn main() {
                         std::env::var("AWS_SECRET_ACCESS_KEY"),
                         std::env::var("AWS_REGION"),
                     ) {
-                        if let Err(e) = upload_to_s3_blocking(&ak, &sk, &region, &bucket, &output) {
+                        if let Err(e) =
+                            upload_to_s3_blocking(&ak, &sk, &region, &bucket, &output_path)
+                        {
                             eprintln!("Upload failed: {}", e);
                         } else {
                             println!("Uploaded to S3 bucket {}", bucket);
@@ -276,7 +279,8 @@ fn main() {
                         std::env::var("AZURE_STORAGE_ACCOUNT"),
                         std::env::var("AZURE_STORAGE_KEY"),
                     ) {
-                        if let Err(e) = upload_to_azure_blocking(&acct, &key, &bucket, &output) {
+                        if let Err(e) = upload_to_azure_blocking(&acct, &key, &bucket, &output_path)
+                        {
                             eprintln!("Upload failed: {}", e);
                         } else {
                             println!("Uploaded to Azure container {}", bucket);
@@ -287,7 +291,7 @@ fn main() {
                 } else if cloud == "server" {
                     let url = server_url.or_else(|| std::env::var("SERVER_URL").ok());
                     if let Some(u) = url {
-                        if let Err(e) = upload_to_server_blocking(&u, &bucket, &output) {
+                        if let Err(e) = upload_to_server_blocking(&u, &bucket, &output_path) {
                             eprintln!("Upload failed: {}", e);
                         } else {
                             println!("Uploaded to server {}", u);
@@ -320,6 +324,7 @@ fn main() {
             } else {
                 compression
             };
+            let output_path = ensure_extension(&output, actual_compression);
             println!(
                 "Scheduling backups every {} seconds from {} to {} bucket {} using {:?}",
                 interval, source, cloud, bucket, actual_compression
@@ -330,15 +335,16 @@ fn main() {
                     break;
                 }
                 println!("Starting scheduled backup #{}", run_count + 1);
-                if let Err(e) = run_backup(&source, &output, actual_compression, mode) {
+                if let Err(e) = run_backup(&source, &output_path, actual_compression, mode) {
                     eprintln!("Scheduled backup failed: {}", e);
                 } else {
-                    println!("Scheduled backup written to {}", output);
+                    println!("Scheduled backup written to {}", output_path);
                     if cloud == "backblaze" {
-                        match load_credentials(account_id.clone(), application_key.clone(), keyring) {
+                        match load_credentials(account_id.clone(), application_key.clone(), keyring)
+                        {
                             Ok((id, key)) => {
                                 if let Err(e) =
-                                    upload_to_backblaze_blocking(&id, &key, &bucket, &output)
+                                    upload_to_backblaze_blocking(&id, &key, &bucket, &output_path)
                                 {
                                     eprintln!("Upload failed: {}", e);
                                 } else {
@@ -353,7 +359,9 @@ fn main() {
                             std::env::var("AWS_SECRET_ACCESS_KEY"),
                             std::env::var("AWS_REGION"),
                         ) {
-                            if let Err(e) = upload_to_s3_blocking(&ak, &sk, &region, &bucket, &output) {
+                            if let Err(e) =
+                                upload_to_s3_blocking(&ak, &sk, &region, &bucket, &output_path)
+                            {
                                 eprintln!("Upload failed: {}", e);
                             } else {
                                 println!("Uploaded to S3 bucket {}", bucket);
@@ -366,7 +374,9 @@ fn main() {
                             std::env::var("AZURE_STORAGE_ACCOUNT"),
                             std::env::var("AZURE_STORAGE_KEY"),
                         ) {
-                            if let Err(e) = upload_to_azure_blocking(&acct, &key, &bucket, &output) {
+                            if let Err(e) =
+                                upload_to_azure_blocking(&acct, &key, &bucket, &output_path)
+                            {
                                 eprintln!("Upload failed: {}", e);
                             } else {
                                 println!("Uploaded to Azure container {}", bucket);
@@ -379,7 +389,7 @@ fn main() {
                             .clone()
                             .or_else(|| std::env::var("SERVER_URL").ok());
                         if let Some(u) = url {
-                            if let Err(e) = upload_to_server_blocking(&u, &bucket, &output) {
+                            if let Err(e) = upload_to_server_blocking(&u, &bucket, &output_path) {
                                 eprintln!("Upload failed: {}", e);
                             } else {
                                 println!("Uploaded to server {}", u);
@@ -537,7 +547,15 @@ fn main() {
                         std::env::var("AWS_SECRET_ACCESS_KEY"),
                         std::env::var("AWS_REGION"),
                     ) {
-                        restore_s3_backup_blocking(&ak, &sk, &region, &b, &backup, &destination, compression)
+                        restore_s3_backup_blocking(
+                            &ak,
+                            &sk,
+                            &region,
+                            &b,
+                            &backup,
+                            &destination,
+                            compression,
+                        )
                     } else {
                         Err("Missing AWS credentials".into())
                     }
@@ -546,7 +564,14 @@ fn main() {
                         std::env::var("AZURE_STORAGE_ACCOUNT"),
                         std::env::var("AZURE_STORAGE_KEY"),
                     ) {
-                        restore_azure_backup_blocking(&acct, &key, &b, &backup, &destination, compression)
+                        restore_azure_backup_blocking(
+                            &acct,
+                            &key,
+                            &b,
+                            &backup,
+                            &destination,
+                            compression,
+                        )
                     } else {
                         Err("Missing Azure credentials".into())
                     }
@@ -606,7 +631,8 @@ fn main() {
                 } else {
                     let password =
                         rpassword::prompt_password("Encryption password: ").unwrap_or_default();
-                    let confirm = rpassword::prompt_password("Confirm password: ").unwrap_or_default();
+                    let confirm =
+                        rpassword::prompt_password("Confirm password: ").unwrap_or_default();
                     if password != confirm {
                         eprintln!("Passwords do not match");
                         return;

@@ -1,9 +1,9 @@
 use chrono::TimeZone;
 use directories::ProjectDirs;
-use eframe::egui::{self, ComboBox, TextEdit, RichText};
+use eframe::egui::{self, ComboBox, RichText, TextEdit};
 use rfd::FileDialog;
 use sequoiarecover::backup::{
-    restore_backup, run_backup_with_progress, BackupMode, CompressionType,
+    ensure_extension, restore_backup, run_backup_with_progress, BackupMode, CompressionType,
 };
 use sequoiarecover::config::{
     config_file_path, encrypt_config, history_file_path, Config, HistoryEntry,
@@ -301,11 +301,12 @@ impl eframe::App for App {
                     let server_url = self.server_url.clone();
                     let status = self.status.clone();
                     let progress = self.progress.clone();
+                    let out_path = ensure_extension(&output, compression);
                     std::thread::spawn(move || {
-                        info!("Starting backup from {} to {}", source, output);
+                        info!("Starting backup from {} to {}", source, out_path);
                         let res = run_backup_with_progress(
                             &source,
-                            &output,
+                            &out_path,
                             compression,
                             mode,
                             |d, t| {
@@ -316,7 +317,8 @@ impl eframe::App for App {
                             },
                         );
                         if res.is_ok() && matches!(destination, BackupDestination::Server) {
-                            if let Err(e) = upload_to_server_blocking(&server_url, &bucket, &output)
+                            if let Err(e) =
+                                upload_to_server_blocking(&server_url, &bucket, &out_path)
                             {
                                 let mut s = status.lock().unwrap();
                                 *s = format!("Upload failed: {}", e);
