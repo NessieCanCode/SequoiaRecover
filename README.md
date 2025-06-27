@@ -13,8 +13,7 @@
 - Recursive directory backups
 - Multi-threaded compression support
 - Automated backup scheduling
-- Easy-to-use command-line interface (CLI) with plans for a GUI
-- Basic cross-platform GUI built using [egui](https://github.com/emilk/egui)
+- Easy-to-use command-line interface (CLI)
 - Focus on disaster recovery and business continuity
 - View past backup history
 - Inspect backup contents without extracting
@@ -100,21 +99,6 @@ You can build and run the command-line application on any supported platform usi
 ```bash
 cargo run -- backup --source /path/to/data --bucket my-bucket
 ```
-
-### Running the GUI
-
-A minimal graphical interface is available as a separate binary:
-
-```bash
-cargo run --bin sequoiarecover-gui
-```
-
-The GUI provides a multi-tab interface for running backups, restoring archives,
-browsing history and initializing credentials. Compression and backup mode
-selections are persisted between sessions alongside the most recent paths.
-While a backup runs a progress bar is displayed. The Backup tab now lets you
-upload directly to Backblaze, AWS or Azure by choosing the
-desired destination.
 
 ### Backblaze Authentication
 
