@@ -7,11 +7,14 @@ SequoiaRecover includes an optional HTTP server for storing backups on your own 
 Use the `serve` subcommand to start the server:
 
 ```bash
-sequoiarecover serve --address 0.0.0.0:3030 --dir /path/to/storage
+sequoiarecover serve --address 0.0.0.0:3030 --dir /path/to/storage \
+    --cert cert.pem --key key.pem --auth-token secret
 ```
 
 - `--address` sets the IP and port to listen on.
 - `--dir` is the directory where uploaded backups are saved.
+- `--cert` and `--key` enable TLS using the provided certificate and key.
+- `--auth-token` requires clients to send this value in the `Authorization` header.
 
 ## Uploading to the server
 

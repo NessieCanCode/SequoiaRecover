@@ -7,6 +7,11 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use warp::{Filter, Rejection, Reply};
 
 #[derive(Debug)]
+pub(crate) struct Unauthorized;
+
+impl warp::reject::Reject for Unauthorized {}
+
+#[derive(Debug)]
 pub(crate) struct BadPath;
 
 impl warp::reject::Reject for BadPath {}
@@ -31,6 +36,12 @@ pub(crate) async fn handle_rejection(
             warp::http::StatusCode::BAD_REQUEST,
         ));
     }
+    if err.find::<Unauthorized>().is_some() {
+        return Ok(warp::reply::with_status(
+            "Unauthorized",
+            warp::http::StatusCode::UNAUTHORIZED,
+        ));
+    }
     if err.is_not_found() {
         return Ok(warp::reply::with_status(
             "Not Found",
@@ -49,10 +60,34 @@ pub struct FileInfo {
     pub modified: i64,
 }
 
+fn auth_filter(
+    token: Option<String>,
+) -> impl Filter<Extract = (), Error = Rejection> + Clone {
+    warp::any()
+        .and(warp::header::optional::<String>("authorization"))
+        .and_then(move |header: Option<String>| {
+            let expected = token.clone();
+            async move {
+                if let Some(expected) = expected {
+                    if header.as_deref() == Some(expected.as_str()) {
+                        Ok(())
+                    } else {
+                        Err(warp::reject::custom(Unauthorized))
+                    }
+                } else {
+                    Ok(())
+                }
+            }
+        })
+        .untuple_one()
+}
+
 pub fn make_routes(
     storage: PathBuf,
+    token: Option<String>,
 ) -> impl Filter<Extract = impl Reply, Error = Rejection> + Clone {
     let storage_filter = warp::any().map(move || storage.clone());
+    let auth = auth_filter(token);
 
     async fn save_stream<S, B>(
         bucket: String,
@@ -92,12 +127,14 @@ pub fn make_routes(
     }
 
     let upload = warp::path!("upload" / String / String)
+        .and(auth.clone())
         .and(warp::post())
         .and(warp::body::stream())
         .and(storage_filter.clone())
         .and_then(save_stream);
 
     let download = warp::path!("download" / String / String)
+        .and(auth.clone())
         .and(warp::get())
         .and(storage_filter.clone())
         .and_then(
@@ -114,6 +151,7 @@ pub fn make_routes(
         );
 
     let list = warp::path!("list" / String)
+        .and(auth)
         .and(warp::get())
         .and(storage_filter.clone())
         .and_then(|bucket: String, storage: PathBuf| async move {
@@ -149,8 +187,20 @@ pub fn make_routes(
 pub async fn run_server(
     addr: std::net::SocketAddr,
     storage: PathBuf,
+    cert: Option<PathBuf>,
+    key: Option<PathBuf>,
+    token: Option<String>,
 ) -> Result<(), Box<dyn Error>> {
-    let routes = make_routes(storage).recover(handle_rejection);
-    warp::serve(routes).run(addr).await;
+    let routes = make_routes(storage, token).recover(handle_rejection);
+    if let (Some(cert), Some(key)) = (cert, key) {
+        warp::serve(routes)
+            .tls()
+            .cert_path(cert)
+            .key_path(key)
+            .run(addr)
+            .await;
+    } else {
+        warp::serve(routes).run(addr).await;
+    }
     Ok(())
 }
