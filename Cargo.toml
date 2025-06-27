@@ -11,6 +11,10 @@ path = "src/lib.rs"
 name = "sequoiarecover"
 path = "src/main.rs"
 
+[[bin]]
+name = "sequoiarecover-gui"
+path = "ui/main.rs"
+
 [dependencies]
 clap = { version = "4", features = ["derive", "env"] }
 clap_mangen = "0.2"
