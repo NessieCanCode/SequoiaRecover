@@ -6,20 +6,19 @@
 
 ## Features
 
+
 - Cross-platform support: Windows, macOS, and Linux
 - Incremental and full backups
-- Integration with cloud storage providers (Backblaze B2, AWS S3 and Azure Blob Storage)
-- Secure, efficient data transfer and storage
-- Recursive directory backups
-- Multi-threaded compression support
+- Plugin-based storage providers via `providers.json`
+- Secure, zero-knowledge encryption with hardware key support
+- Resumable uploads with deduplication
+- Network throttling and multi-threaded compression
 - Automated backup scheduling
-- Easy-to-use command-line interface (CLI)
+- Easy CLI with `init`, `keygen`, and `keyrotate`
+- Management server and modern GUI
 - Focus on disaster recovery and business continuity
-- View past backup history
-- Inspect backup contents without extracting
-- Restore files from archives
-- Retrieve and restore backups directly from your chosen cloud provider
-
+- View past backup history and inspect archives
+- Restore files from any provider
 ---
 
 ## Getting Started
@@ -123,6 +122,30 @@ You'll be prompted for the account ID and application key. When using the `--key
 AWS and Azure credentials are read from the environment. Set `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` and `AWS_REGION` when using `--cloud aws`. For Azure Blob Storage set `AZURE_STORAGE_ACCOUNT` and `AZURE_STORAGE_KEY` when using `--cloud azure`.
 
 
+
+### Plugin-based Storage Providers
+
+Custom providers can be defined in `~/.sequoiarecover/providers.json`. Each entry specifies a name, a provider type such as `backblaze`, `aws` or `azure`, and any necessary credentials. The CLI loads this file on startup to register the providers.
+
+### Management Server
+
+The `management-server/` crate implements a lightweight web service for administering users and orchestrating backups across machines. Launch it with `cargo run -p management-server` and use the REST API to register users, assign roles and inspect the audit log.
+
+### Graphical Interface
+
+A modern GUI lives under `ui/`. Build it with `cargo run -p ui` to open a cross-platform interface for scheduling and monitoring backups.
+
+### Encryption & Key Management
+
+Use `sequoiarecover init` to store cloud credentials. Run `keygen` once to create an archive encryption key and `keyrotate` whenever the key needs to be replaced.
+
+### Resumable Uploads & Deduplication
+
+Backups are uploaded in chunks so interrupted transfers resume automatically. A deduplication index avoids re-uploading identical data.
+
+### Upcoming Tasks
+
+Planned enhancements include a zero-knowledge architecture, compliance reporting, hardware security key support and network throttling options.
 ### Logging
 
 SequoiaRecover uses the `tracing` crate for logging. Enable detailed output by
@@ -138,21 +161,22 @@ Use `debug` for even more verbose logs.
 
 The commands below illustrate a common backup cycle.
 
-1. Set up credentials with `sequoiarecover init`.
-2. Run a full backup:
+1. Configure providers in `~/.sequoiarecover/providers.json` and store credentials with `sequoiarecover init`.
+2. Generate an encryption key using `sequoiarecover keygen`.
+3. Run a full backup:
    ```bash
    sequoiarecover backup --source /data --bucket my-bucket --mode full
    ```
-3. Schedule incremental backups:
+4. Schedule incremental backups:
    ```bash
    sequoiarecover schedule --source /data --bucket my-bucket --interval 3600 \
        --mode incremental
    ```
-4. Review stored archives:
+5. Review stored archives or monitor jobs from the GUI or management server:
    ```bash
    sequoiarecover history --bucket my-bucket
    ```
-5. Restore files when needed:
+6. Restore files when needed:
    ```bash
    sequoiarecover restore --backup backup.tar --bucket my-bucket \
        --destination /restore/path
