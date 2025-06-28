@@ -16,9 +16,17 @@ This document outlines key tasks for elevating SequoiaRecover to an industry-gra
 - [ ] Support additional cloud providers via a plug-in architecture.
 - [ ] Provide configuration files and environment variable overrides.
 - [ ] Improve the GUI with progress indicators and error dialogs.
+- [ ] Add GUI controls for initializing and storing provider credentials.
+- [ ] Implement GUI flows for full and incremental backups.
+- [ ] Mirror `schedule` command options in the GUI for automated jobs.
+- [ ] Provide GUI dialogs to browse history, list archives and restore files.
+- [ ] Surface `verify` results in the interface with clear feedback.
 - [ ] Package binaries for major platforms (deb/rpm, Homebrew, MSI).
 - [ ] Document typical workflows and troubleshooting in a user guide.
 - [ ] Generate compliance reports summarizing retention and encryption.
+
+## Documentation
+- [ ] Rewrite README with polished setup instructions and commercial messaging.
 
 ## Server Improvements
 - [ ] Add HTTPS support with configurable certificates.
