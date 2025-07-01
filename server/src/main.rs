@@ -1,4 +1,5 @@
 use actix_web::{web, App, HttpServer, HttpResponse, Responder, HttpRequest};
+use sequoiarecover::backup::{run_backup, CompressionType, BackupMode};
 use serde::{Deserialize, Serialize};
 use std::sync::Mutex;
 use std::collections::HashMap;
@@ -159,6 +160,19 @@ async fn push_alert(data: web::Data<AppState>, msg: web::Json<AlertMsg>) -> impl
     HttpResponse::Ok().finish()
 }
 
+#[derive(Deserialize)]
+struct BackupReq {
+    source: String,
+    output: String,
+}
+
+async fn start_backup(req: web::Json<BackupReq>) -> impl Responder {
+    match run_backup(&req.source, &req.output, CompressionType::Gzip, BackupMode::Full) {
+        Ok(_) => HttpResponse::Ok().body("backup complete"),
+        Err(e) => HttpResponse::InternalServerError().body(e.to_string()),
+    }
+}
+
 async fn list_alerts(data: web::Data<AppState>, req: HttpRequest) -> impl Responder {
     let token = req
         .headers()
@@ -188,6 +202,7 @@ async fn main() -> std::io::Result<()> {
             .route("/roles", web::post().to(add_role))
             .route("/audit", web::get().to(audit_log))
             .route("/alert", web::post().to(push_alert))
+            .route("/backup", web::post().to(start_backup))
             .route("/alerts", web::get().to(list_alerts))
     })
     .bind(("0.0.0.0", 8080))?

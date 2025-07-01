@@ -136,12 +136,12 @@ Custom providers can be defined in `~/.sequoiarecover/providers.json`. Each entr
 
 ### Management Server
 
-The `management-server/` crate implements a lightweight web service for administering users and orchestrating backups across machines. Launch it with `cargo run -p management-server` and use the REST API to register users, assign roles and inspect the audit log.
+The `server/` crate implements a lightweight web service for administering users and orchestrating backups across machines. Launch it with `cargo run -p sequoiarecover-server` and use the REST API to register users, assign roles and inspect the audit log.
 Clients can POST security alerts to the `/alert` endpoint. Set the `MGMT_CONSOLE_URL` environment variable on backup hosts so alerts are delivered automatically.
 
 ### Graphical Interface
 
-A modern GUI lives under `ui/`. Build it with `cargo run -p ui` to open a cross-platform interface for scheduling and monitoring backups.
+A modern GUI lives under `gui/`. Build it with `cargo run -p sequoiarecover-gui` to open a cross-platform interface for scheduling and monitoring backups.
 
 ### Encryption & Key Management
 
