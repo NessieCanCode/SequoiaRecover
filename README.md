@@ -132,7 +132,21 @@ AWS and Azure credentials are read from the environment. Set `AWS_ACCESS_KEY_ID`
 
 ### Plugin-based Storage Providers
 
-Custom providers can be defined in `~/.sequoiarecover/providers.json`. Each entry specifies a name, a provider type such as `backblaze`, `aws` or `azure`, and any necessary credentials. The CLI loads this file on startup to register the providers.
+Custom providers can be defined in `~/.sequoiarecover/providers.json`. Each entry
+specifies a `name`, a provider `type` such as `backblaze`, `aws` or `azure`, and
+any required credentials. The CLI loads this file along with the optional
+`SEQUOIA_PROVIDERS` environment variable (containing the same JSON format) to
+register providers at runtime.
+
+Example environment value:
+
+```bash
+export SEQUOIA_PROVIDERS='{"providers":[{"name":"myb2","type":"backblaze","credentials":{"account_id":"id","application_key":"key"}}]}'
+```
+
+Providers are Rust structs that implement the `StorageProvider` trait in the
+`sequoiarecover-core` crate. Implement the trait for a new backend and register
+it using `register_provider` so the CLI and server can use it.
 
 ### Management Server
 
