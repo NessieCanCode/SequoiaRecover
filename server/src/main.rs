@@ -192,6 +192,8 @@ async fn list_alerts(data: web::Data<AppState>, req: HttpRequest) -> impl Respon
 async fn main() -> std::io::Result<()> {
     let mut rng = rand::thread_rng();
     let secret: [u8; 32] = rng.gen();
+    let _ = sequoiarecover::remote::load_providers_from_config();
+    let _ = sequoiarecover::remote::load_providers_from_env();
     let data = web::Data::new(AppState { users: Mutex::new(HashMap::new()), audit: Mutex::new(Vec::new()), alerts: Mutex::new(Vec::new()), jwt_secret: secret.to_vec() });
     HttpServer::new(move || {
         App::new()

@@ -147,6 +147,88 @@ pub fn load_providers_from_config() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
+pub fn load_providers_from_env() -> Result<(), Box<dyn Error>> {
+    if let (Ok(id), Ok(key)) = (
+        std::env::var("B2_ACCOUNT_ID"),
+        std::env::var("B2_APPLICATION_KEY"),
+    ) {
+        register_provider(
+            "backblaze",
+            Box::new(move || Box::new(backblaze::BackblazeProvider::new(&id, &key))),
+        );
+    }
+    if let (Ok(ak), Ok(sk), Ok(region)) = (
+        std::env::var("AWS_ACCESS_KEY_ID"),
+        std::env::var("AWS_SECRET_ACCESS_KEY"),
+        std::env::var("AWS_REGION"),
+    ) {
+        register_provider(
+            "aws",
+            Box::new(move || Box::new(aws::AwsProvider::new(&ak, &sk, &region))),
+        );
+    }
+    if let (Ok(acct), Ok(key)) = (
+        std::env::var("AZURE_STORAGE_ACCOUNT"),
+        std::env::var("AZURE_STORAGE_KEY"),
+    ) {
+        register_provider(
+            "azure",
+            Box::new(move || Box::new(azure::AzureProvider::new(&acct, &key))),
+        );
+    }
+
+    if let Ok(json) = std::env::var("SEQUOIA_PROVIDERS") {
+        let cfg: ProvidersFile = serde_json::from_str(&json)?;
+        for p in cfg.providers {
+            match p.provider_type.as_str() {
+                "backblaze" => {
+                    if let (Some(id), Some(key)) = (
+                        p.credentials.get("account_id"),
+                        p.credentials.get("application_key"),
+                    ) {
+                        let id = id.clone();
+                        let key = key.clone();
+                        register_provider(
+                            &p.name,
+                            Box::new(move || Box::new(backblaze::BackblazeProvider::new(&id, &key))),
+                        );
+                    }
+                }
+                "aws" => {
+                    if let (Some(ak), Some(sk), Some(region)) = (
+                        p.credentials.get("access_key"),
+                        p.credentials.get("secret_key"),
+                        p.credentials.get("region"),
+                    ) {
+                        let ak = ak.clone();
+                        let sk = sk.clone();
+                        let region = region.clone();
+                        register_provider(
+                            &p.name,
+                            Box::new(move || Box::new(aws::AwsProvider::new(&ak, &sk, &region))),
+                        );
+                    }
+                }
+                "azure" => {
+                    if let (Some(acct), Some(key)) = (
+                        p.credentials.get("account"),
+                        p.credentials.get("key"),
+                    ) {
+                        let acct = acct.clone();
+                        let key = key.clone();
+                        register_provider(
+                            &p.name,
+                            Box::new(move || Box::new(azure::AzureProvider::new(&acct, &key))),
+                        );
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    Ok(())
+}
+
 pub use backblaze::{
     download_from_backblaze_blocking, list_remote_backup_blocking,
     restore_remote_backup_blocking, show_remote_history_blocking,
