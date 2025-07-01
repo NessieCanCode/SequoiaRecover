@@ -1,5 +1,5 @@
 [package]
-name = "management-server"
+name = "sequoiarecover-server"
 version = "0.1.0"
 edition = "2021"
 
@@ -11,4 +11,4 @@ jsonwebtoken = "8"
 totp-lite = "2.0"
 rand = "0.8"
 chrono = { version = "0.4", features = ["serde"] }
-
+sequoiarecover = { package = "sequoiarecover-core", path = "../core" }
