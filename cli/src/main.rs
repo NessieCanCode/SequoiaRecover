@@ -4,9 +4,8 @@ use sequoiarecover::backup::{
 };
 use sequoiarecover::compliance;
 use sequoiarecover::config::{
-    config_file_path, encrypt_config, get_or_create_local_key, load_local_key,
-    local_key_file_path, read_history, show_history,
-    store_credentials_keyring, update_backup_providers, Config,
+    config_file_path, encrypt_config, get_or_create_local_key, load_local_key, local_key_file_path,
+    read_history, show_history, store_credentials_keyring, update_backup_providers, Config,
 };
 
 #[cfg(feature = "hardware-auth")]
@@ -33,6 +32,12 @@ struct Cli {
     /// Limit download bandwidth in Mbps
     #[arg(long)]
     max_download_mbps: Option<u64>,
+    /// Resume interrupted transfers
+    #[arg(long, default_value_t = false)]
+    resume: bool,
+    /// Chunk size in bytes for transfers
+    #[arg(long)]
+    chunk_size: Option<usize>,
     #[command(subcommand)]
     command: Commands,
 }
@@ -288,10 +293,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                 }
                 let target = &enc_path;
+                let opts = sequoiarecover::transfer::TransferOpts {
+                    chunk_size: cli.chunk_size.unwrap_or(4 * 1024 * 1024),
+                    resume: cli.resume,
+                };
                 let mut uploaded = Vec::new();
                 for cloud in &clouds {
                     if let Some(p) = sequoiarecover::remote::get_provider(cloud) {
-                        if let Err(e) = p.upload_blocking(&bucket, target) {
+                        if let Err(e) =
+                            sequoiarecover::transfer::upload_file(&*p, &bucket, target, &opts)
+                        {
                             eprintln!("Upload to {} failed: {}", cloud, e);
                         } else {
                             println!("Uploaded to {} bucket {}", cloud, bucket);
@@ -359,10 +370,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         sleep(Duration::from_secs(interval));
                         continue;
                     }
+                    let opts = sequoiarecover::transfer::TransferOpts {
+                        chunk_size: cli.chunk_size.unwrap_or(4 * 1024 * 1024),
+                        resume: cli.resume,
+                    };
                     let mut uploaded = Vec::new();
                     for cloud in &clouds {
                         if let Some(p) = sequoiarecover::remote::get_provider(cloud) {
-                            if let Err(e) = p.upload_blocking(&bucket, &output_path) {
+                            if let Err(e) = sequoiarecover::transfer::upload_file(
+                                &*p,
+                                &bucket,
+                                &output_path,
+                                &opts,
+                            ) {
                                 eprintln!("Upload to {} failed: {}", cloud, e);
                             } else {
                                 println!("Uploaded to {} bucket {}", cloud, bucket);
@@ -448,9 +468,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             format!("{}.enc", entry.backup)
                         };
                         let mut last_err: Option<Box<dyn std::error::Error>> = None;
+                        let opts = sequoiarecover::transfer::TransferOpts {
+                            chunk_size: cli.chunk_size.unwrap_or(4 * 1024 * 1024),
+                            resume: cli.resume,
+                        };
                         for prov in entry.providers {
                             if let Some(p) = sequoiarecover::remote::get_provider(&prov) {
-                                match p.download_blocking(&b, &remote, &tmp_enc) {
+                                match sequoiarecover::transfer::download_file(
+                                    &*p, &b, &remote, &tmp_enc, &opts,
+                                ) {
                                     Ok(_) => {
                                         last_err = None;
                                         break;
@@ -464,7 +490,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         Err("History entry not found".into())
                     }
                 } else if let Some(p) = sequoiarecover::remote::get_provider(&cloud) {
-                    p.download_blocking(&b, &backup, &tmp_enc)
+                    let opts = sequoiarecover::transfer::TransferOpts {
+                        chunk_size: cli.chunk_size.unwrap_or(4 * 1024 * 1024),
+                        resume: cli.resume,
+                    };
+                    sequoiarecover::transfer::download_file(&*p, &b, &backup, &tmp_enc, &opts)
                 } else {
                     Err("Unsupported cloud".into())
                 };
@@ -515,7 +545,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 for provider in &entry.providers {
                     if let Some(p) = sequoiarecover::remote::get_provider(provider) {
                         let tmp = std::env::temp_dir().join("verify.tmp");
-                        match p.download_blocking(&bucket, &remote_name, &tmp) {
+                        let opts = sequoiarecover::transfer::TransferOpts {
+                            chunk_size: cli.chunk_size.unwrap_or(4 * 1024 * 1024),
+                            resume: cli.resume,
+                        };
+                        match sequoiarecover::transfer::download_file(
+                            &*p,
+                            &bucket,
+                            &remote_name,
+                            &tmp,
+                            &opts,
+                        ) {
                             Ok(_) => {
                                 let _ = std::fs::remove_file(&tmp);
                                 println!("{} present on {}", remote_name, provider);
@@ -533,7 +573,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
         },
-        Commands::Init { keyring, #[cfg(feature = "hardware-auth")] hardware_key } => match config_file_path() {
+        Commands::Init {
+            keyring,
+            #[cfg(feature = "hardware-auth")]
+            hardware_key,
+        } => match config_file_path() {
             Ok(path) => {
                 let account_id =
                     rpassword::prompt_password("Backblaze Account ID: ").unwrap_or_default();
@@ -585,7 +629,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             Err(e) => eprintln!("{}", e),
         },
-        Commands::Keygen { #[cfg(feature = "hardware-auth")] hardware_key } => {
+        Commands::Keygen {
+            #[cfg(feature = "hardware-auth")]
+            hardware_key,
+        } => {
             #[cfg(feature = "hardware-auth")]
             if hardware_key {
                 match hardware_key::get_or_create() {
@@ -598,7 +645,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 Ok(_) => println!("Encryption key generated"),
                 Err(e) => eprintln!("{}", e),
             }
-        },
+        }
         Commands::Keyrotate => match local_key_file_path() {
             Ok(path) => {
                 if let Some(p) = path.parent() {
