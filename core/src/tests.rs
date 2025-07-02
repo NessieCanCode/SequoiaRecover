@@ -3,11 +3,14 @@ use crate::backup::{
 };
 use crate::config::{decrypt_config, encrypt_config, Config};
 use crate::remote::show_remote_history_blocking;
+use crate::remote::StorageProvider;
 use crate::remote::{download_from_backblaze_blocking, upload_to_backblaze_blocking};
+use crate::transfer::{download_file, upload_file, TransferOpts};
 use filetime::FileTime;
 use serial_test::serial;
 use sha2::{Digest, Sha256};
 use std::fs;
+use std::sync::Mutex;
 use std::time::{Duration, SystemTime};
 use tempfile::tempdir;
 
@@ -155,4 +158,113 @@ fn test_auto_select_compression_override() {
     assert_eq!(auto_select_compression(Some(1500)), CompressionType::None);
     assert_eq!(auto_select_compression(Some(200)), CompressionType::Gzip);
     assert_eq!(auto_select_compression(Some(50)), CompressionType::Zstd);
+}
+
+struct FailingProvider {
+    root: std::path::PathBuf,
+    upload_calls: Mutex<usize>,
+    fail_upload_at: usize,
+    download_calls: Mutex<usize>,
+    fail_download_at: usize,
+}
+
+impl FailingProvider {
+    fn new(root: std::path::PathBuf, fail_upload_at: usize, fail_download_at: usize) -> Self {
+        Self {
+            root,
+            upload_calls: Mutex::new(0),
+            fail_upload_at,
+            download_calls: Mutex::new(0),
+            fail_download_at,
+        }
+    }
+}
+
+impl StorageProvider for FailingProvider {
+    fn upload_blocking(
+        &self,
+        bucket: &str,
+        file_path: &str,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let mut c = self.upload_calls.lock().unwrap();
+        if *c == self.fail_upload_at {
+            *c += 1;
+            return Err("upload fail".into());
+        }
+        let dest = self.root.join(bucket);
+        std::fs::create_dir_all(&dest)?;
+        let name = std::path::Path::new(file_path).file_name().unwrap();
+        std::fs::copy(file_path, dest.join(name))?;
+        *c += 1;
+        Ok(())
+    }
+
+    fn download_blocking(
+        &self,
+        bucket: &str,
+        file_name: &str,
+        dest: &std::path::Path,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let mut c = self.download_calls.lock().unwrap();
+        if *c == self.fail_download_at {
+            *c += 1;
+            return Err("download fail".into());
+        }
+        let src = self.root.join(bucket).join(file_name);
+        std::fs::copy(src, dest)?;
+        *c += 1;
+        Ok(())
+    }
+
+    fn show_history_blocking(
+        &self,
+        _bucket: &str,
+        _ret: Option<std::time::Duration>,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        Ok(())
+    }
+}
+
+#[test]
+#[serial]
+fn test_chunked_upload_resume() -> Result<(), Box<dyn std::error::Error>> {
+    let dir = tempdir()?;
+    let provider = FailingProvider::new(dir.path().join("remote"), 1, usize::MAX);
+    let bucket = "b";
+    let src = dir.path().join("big.bin");
+    std::fs::write(&src, vec![1u8; 2 * 1024 * 1024 + 10])?;
+    let opts = TransferOpts {
+        chunk_size: 1024 * 1024,
+        resume: true,
+    };
+    assert!(upload_file(&provider, bucket, src.to_str().unwrap(), &opts).is_err());
+    assert!(upload_file(&provider, bucket, src.to_str().unwrap(), &opts).is_ok());
+    assert!(provider.root.join(bucket).join("big.bin.manifest").exists());
+    Ok(())
+}
+
+#[test]
+#[serial]
+fn test_chunked_download_resume() -> Result<(), Box<dyn std::error::Error>> {
+    let dir = tempdir()?;
+    let remote = dir.path().join("remote");
+    let bucket_dir = remote.join("b");
+    std::fs::create_dir_all(&bucket_dir)?;
+    std::fs::write(bucket_dir.join("file.part0"), b"hello")?;
+    std::fs::write(bucket_dir.join("file.part1"), b"world")?;
+    std::fs::write(
+        bucket_dir.join("file.manifest"),
+        serde_json::to_string(&2usize)?,
+    )?;
+    let provider = FailingProvider::new(remote.clone(), usize::MAX, 1);
+    let dest = dir.path().join("out.txt");
+    let opts = TransferOpts {
+        chunk_size: 5,
+        resume: true,
+    };
+    assert!(download_file(&provider, "b", "file", &dest, &opts).is_err());
+    assert!(download_file(&provider, "b", "file", &dest, &opts).is_ok());
+    let data = std::fs::read(&dest)?;
+    assert_eq!(data, b"helloworld");
+    Ok(())
 }
